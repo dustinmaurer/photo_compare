@@ -21,6 +21,8 @@ class MetadataManager:
 
         # Add any new photos found in folder
         self._add_new_photos()
+        # Remove any photos no longer in folder
+        self._remove_missing_photos()
         self.save_metadata()
 
     def _add_new_photos(self):
@@ -45,6 +47,34 @@ class MetadataManager:
                     "comparisons": 0,  # Number of comparisons (c)
                 }
 
+    def _remove_missing_photos(self):
+        """Remove metadata entries for photos no longer in folder"""
+        extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.tiff"]
+        image_files = []
+
+        for ext in extensions:
+            image_files.extend(glob.glob(os.path.join(self.photo_folder, ext)))
+            image_files.extend(glob.glob(os.path.join(self.photo_folder, ext.upper())))
+
+        # Get list of filenames that actually exist
+        existing_filenames = set(
+            os.path.basename(file_path) for file_path in image_files
+        )
+
+        # Get list of filenames in metadata
+        metadata_filenames = set(self.metadata.keys())
+
+        # Find files to remove (in metadata but not in folder)
+        files_to_remove = metadata_filenames - existing_filenames
+
+        # Remove them
+        for filename in files_to_remove:
+            print(f"Removing missing photo from metadata: {filename}")
+            del self.metadata[filename]
+
+        if files_to_remove:
+            print(f"Removed {len(files_to_remove)} missing photos from metadata")
+
     def save_metadata(self):
         """Save metadata to JSON file"""
         with open(self.metadata_file, "w") as f:
@@ -66,3 +96,49 @@ class MetadataManager:
             return 50
         skill = self.metadata[filename]["skill"]
         return 100 / (1 + math.exp(-skill))
+
+    def update_skills(self, filename_a, filename_b, outcome, k_0=1):
+        """Update skills and comparison counts.
+        Outcome: 1 (A wins), 0 (B wins), 0.5 (tie), 1.5 (both win), -0.5 (both lose)"""
+
+        # Get current data
+        data_a = self.metadata[filename_a]
+        data_b = self.metadata[filename_b]
+
+        s_a, c_a = data_a["skill"], data_a["comparisons"]
+        s_b, c_b = data_b["skill"], data_b["comparisons"]
+
+        # Calculate dynamic k values
+        k_a = k_0 / math.sqrt(c_a + 1)
+        k_b = k_0 / math.sqrt(c_b + 1)
+
+        # Calculate expected outcomes
+        e_a = 1 / (1 + math.exp(-(s_a - s_b)))
+        e_b = 1 - e_a
+
+        # Handle special cases
+        if outcome == 1.5:  # Both win
+            outcome_a, outcome_b = 1, 1
+        elif outcome == -0.5:  # Both lose
+            outcome_a, outcome_b = 0, 0
+        elif outcome == 0.5:  # Tie
+            outcome_a, outcome_b = 0.5, 0.5
+        elif outcome == 1:  # A wins
+            outcome_a, outcome_b = 1, 0
+        else:  # B wins (outcome == 0)
+            outcome_a, outcome_b = 0, 1
+
+        # Update skills
+        s_a_new = s_a + k_a * (outcome_a - e_a)
+        s_b_new = s_b + k_b * (outcome_b - e_b)
+
+        # Update metadata
+        self.metadata[filename_a]["skill"] = s_a_new
+        self.metadata[filename_a]["comparisons"] = c_a + 1
+        self.metadata[filename_b]["skill"] = s_b_new
+        self.metadata[filename_b]["comparisons"] = c_b + 1
+
+        self.save_metadata()
+
+        print(f"Updated {filename_a}: skill {s_a:.2f} -> {s_a_new:.2f}")
+        print(f"Updated {filename_b}: skill {s_b:.2f} -> {s_b_new:.2f}")
