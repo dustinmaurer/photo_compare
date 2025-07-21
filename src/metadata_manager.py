@@ -117,16 +117,17 @@ class MetadataManager:
         e_b = 1 - e_a
 
         # Handle special cases
-        if outcome == 1.5:  # Both win
-            outcome_a, outcome_b = 1, 1
-        elif outcome == -0.5:  # Both lose
-            outcome_a, outcome_b = 0, 0
-        elif outcome == 0.5:  # Tie
-            outcome_a, outcome_b = 0.5, 0.5
-        elif outcome == 1:  # A wins
-            outcome_a, outcome_b = 1, 0
-        else:  # B wins (outcome == 0)
-            outcome_a, outcome_b = 0, 1
+        match outcome:
+            case "both":  # Both win
+                outcome_a, outcome_b = 1, 1
+            case "neither":  # Both lose
+                outcome_a, outcome_b = 0, 0
+            case "tie":  # Tie
+                outcome_a, outcome_b = 0.5, 0.5
+            case "left":  # left wins
+                outcome_a, outcome_b = 1, 0
+            case "right":  # right wins
+                outcome_a, outcome_b = 0, 1
 
         # Update skills
         s_a_new = s_a + k_a * (outcome_a - e_a)
