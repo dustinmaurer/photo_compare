@@ -1,5 +1,6 @@
 import glob
 import json
+import math
 import os
 from datetime import datetime
 
@@ -40,6 +41,8 @@ class MetadataManager:
                     "tags": [],
                     "last_compared": None,
                     "created_date": datetime.now().isoformat(),
+                    "skill": 0,  # Initial skill (s = 0, quantile = 50)
+                    "comparisons": 0,  # Number of comparisons (c)
                 }
 
     def save_metadata(self):
@@ -56,3 +59,10 @@ class MetadataManager:
     def get_photo_data(self, filename):
         """Get metadata for a specific photo"""
         return self.metadata.get(filename, {})
+
+    def get_quantile(self, filename):
+        """Get current quantile rank for a photo"""
+        if filename not in self.metadata:
+            return 50
+        skill = self.metadata[filename]["skill"]
+        return 100 / (1 + math.exp(-skill))

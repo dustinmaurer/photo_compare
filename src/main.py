@@ -10,16 +10,36 @@ from metadata_manager import MetadataManager
 
 
 class PhotoManager:
-    def __init__(self):
+    def __init__(self, test_mode=False):
         self.root = tk.Tk()
         self.root.title("Photo Manager")
         self.root.geometry("1200x600")
         self.metadata_manager = None
+        self.test_mode = test_mode
 
         self.photo_folder = None
         self.image_files = []
 
         self.setup_ui()
+
+        # Auto-load test folder if in test mode
+        if self.test_mode:
+            self.auto_load_test_folder()
+
+    def auto_load_test_folder(self):
+        # Set your test folder path here
+        test_folder = (
+            r"C:\Users\Admin\Desktop\Photos and Videos\test"  # Update this path
+        )
+
+        if os.path.exists(test_folder):
+            self.photo_folder = test_folder
+            self.metadata_manager = MetadataManager(test_folder)
+            self.metadata_manager.load_metadata()
+            self.load_images()
+            self.display_random_pair()
+        else:
+            print(f"Test folder not found: {test_folder}")
 
     def setup_ui(self):
         # Folder selection button
@@ -79,10 +99,21 @@ class PhotoManager:
         try:
             img = Image.open(path)
             # Resize to fit in half the window
-            img.thumbnail((580, 500), Image.Resampling.LANCZOS)
+            img.thumbnail((580, 400), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img)
+            filename = os.path.basename(path)
 
-            label.configure(image=photo)
+            # # Get metadata
+            skill = self.metadata_manager.metadata[filename]["skill"]
+            comparisons = self.metadata_manager.metadata[filename]["comparisons"]
+            quantile = self.metadata_manager.get_quantile(filename)
+
+            # Create info text
+            info_text = f"{filename}\nSkill: {skill:.2f} | Quantile: {quantile:.1f} | Comparisons: {comparisons}"
+
+            label.configure(
+                image=photo, text=info_text, compound="top", font=("Arial", 10)
+            )
             label.image = photo  # Keep reference
         except Exception as e:
             label.configure(text=f"Error loading image: {os.path.basename(path)}")
@@ -92,5 +123,6 @@ class PhotoManager:
 
 
 if __name__ == "__main__":
-    app = PhotoManager()
+    # Set to True for testing, False for normal use
+    app = PhotoManager(test_mode=True)
     app.run()
