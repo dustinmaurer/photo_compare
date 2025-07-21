@@ -97,7 +97,7 @@ class MetadataManager:
         skill = self.metadata[filename]["skill"]
         return 100 / (1 + math.exp(-skill))
 
-    def update_skills(self, filename_a, filename_b, outcome, k_0=1):
+    def update_skills(self, filename_a, filename_b, outcome, k_0=2):
         """Update skills and comparison counts.
         Outcome: 1 (A wins), 0 (B wins), 0.5 (tie), 1.5 (both win), -0.5 (both lose)"""
 

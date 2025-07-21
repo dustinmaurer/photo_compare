@@ -2,6 +2,7 @@ import glob
 import os
 import random
 import tkinter as tk
+import tkinter.ttk as ttk
 from tkinter import filedialog, messagebox
 
 from PIL import Image, ImageTk
@@ -140,24 +141,42 @@ class PhotoManager:
 
     def load_images(self):
         extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.tiff"]
-        self.image_files = []
+        all_image_files = []
 
         for ext in extensions:
-            self.image_files.extend(glob.glob(os.path.join(self.photo_folder, ext)))
-            self.image_files.extend(
+            all_image_files.extend(glob.glob(os.path.join(self.photo_folder, ext)))
+            all_image_files.extend(
                 glob.glob(os.path.join(self.photo_folder, ext.upper()))
             )
 
+        # Filter out images with quantile below 0.10 for comparisons
+        self.image_files = []
+        masked_count = 0
+
+        for file_path in all_image_files:
+            filename = os.path.basename(file_path)
+            if self.metadata_manager and filename in self.metadata_manager.metadata:
+                quantile = self.metadata_manager.get_quantile(filename)
+                if quantile < 10:
+                    masked_count += 1
+                    continue  # Skip this image for comparisons
+
+            self.image_files.append(file_path)
+
         if len(self.image_files) < 2:
-            messagebox.showwarning("Warning", "Need at least 2 images in folder")
+            print(
+                f"Warning: Only {len(self.image_files)} images available for comparison"
+            )
+            if masked_count > 0:
+                print(f"({masked_count} images masked due to low quantile)")
 
     def display_random_pair(self):
         if len(self.image_files) < 2:
             print("Need at least 2 different images")
             return
 
-        # Ensure we get 2 different images
-        self.current_images = random.sample(self.image_files, 2)
+        # Weighted selection based on distance from 0.10 quantile
+        self.current_images = self.get_weighted_selection(2)
 
         # Double-check they're different (shouldn't happen with random.sample, but just in case)
         while self.current_images[0] == self.current_images[1]:
@@ -166,6 +185,49 @@ class PhotoManager:
         # Load and display images
         self.show_image(self.current_images[0], self.img1_label)
         self.show_image(self.current_images[1], self.img2_label)
+
+    def get_weighted_selection(self, k=2):
+        """Select images with weighting based on distance from 0.20 quantile"""
+        if len(self.image_files) < k:
+            return self.image_files
+
+        # Calculate weights for each image
+        weights = []
+        filenames = []
+
+        for image_path in self.image_files:
+            filename = os.path.basename(image_path)
+            quantile = (
+                self.metadata_manager.get_quantile(filename) / 100
+            )  # Convert to 0-1
+
+            # Distance from 0.20 - closer to 0.20 = higher weight
+            distance_from_target = abs(quantile - 0.20)
+            # Invert distance so closer = higher weight, add small epsilon to avoid zero
+            weight = 1 / (distance_from_target * distance_from_target + 0.01)
+
+            weights.append(weight)
+            filenames.append(image_path)
+
+        # Use random.choices for weighted selection without replacement
+        selected = []
+        remaining_files = filenames.copy()
+        remaining_weights = weights.copy()
+
+        for _ in range(k):
+            if not remaining_files:
+                break
+
+            # Select one image based on weights
+            chosen = random.choices(remaining_files, weights=remaining_weights, k=1)[0]
+            selected.append(chosen)
+
+            # Remove selected image from remaining options
+            idx = remaining_files.index(chosen)
+            remaining_files.pop(idx)
+            remaining_weights.pop(idx)
+
+        return selected
 
     def reset_all_scores(self):
         """Reset all photo skills and comparison counts"""
@@ -218,6 +280,8 @@ class PhotoManager:
         for widget in self.root.winfo_children():
             widget.destroy()
 
+        self.load_images()  # Reload image list
+
         # Calculate window size for 10 photos (2 rows × 5 columns)
         # Each photo: 280px + padding, plus scrollbar and buttons
         window_width = (280 + 20) * 5 + 40  # 5 columns * (image + padding) + margins
@@ -259,6 +323,40 @@ class PhotoManager:
             bg="lightcoral",
         )
         reset_btn.pack(side="left", padx=10)
+
+        # Delete photos section
+        delete_frame = tk.Frame(button_frame)
+        delete_frame.pack(side="left", padx=20)
+
+        tk.Label(delete_frame, text="Delete bottom", font=("Arial", 12)).pack(
+            side="left"
+        )
+
+        # Initialize delete_count if it doesn't exist
+        if not hasattr(self, "delete_count"):
+            self.delete_count = tk.IntVar(value=1)
+
+        delete_spinbox = tk.Spinbox(
+            delete_frame,
+            from_=0,
+            to=10,
+            width=3,
+            textvariable=self.delete_count,
+            font=("Arial", 12),
+        )
+        delete_spinbox.pack(side="left", padx=5)
+
+        tk.Label(delete_frame, text="photos", font=("Arial", 12)).pack(side="left")
+
+        delete_btn = tk.Button(
+            delete_frame,
+            text="Delete Photos",
+            command=self.delete_bottom_photos,
+            font=("Arial", 12),
+            bg="red",
+            fg="white",
+        )
+        delete_btn.pack(side="left", padx=5)
 
         # Header
         header = tk.Label(
@@ -334,6 +432,59 @@ class PhotoManager:
 
         self.setup_ui()
         self.display_random_pair()
+
+    def delete_bottom_photos(self):
+        """Delete the bottom N photos based on skill ranking"""
+        if not self.metadata_manager:
+            return
+
+        num_to_delete = self.delete_count.get()
+        if num_to_delete == 0:
+            return
+
+        # Get photos sorted by skill (lowest first)
+        photos_data = []
+        for filename, data in self.metadata_manager.metadata.items():
+            if os.path.exists(os.path.join(self.photo_folder, filename)):
+                photos_data.append((filename, data["skill"]))
+
+        photos_data.sort(key=lambda x: x[1])  # Sort by skill (lowest first)
+
+        if num_to_delete > len(photos_data):
+            from tkinter import messagebox
+
+            messagebox.showwarning(
+                "Warning", f"Only {len(photos_data)} photos available"
+            )
+            return
+
+        photos_to_delete = photos_data[:num_to_delete]
+
+        # Confirm deletion
+        from tkinter import messagebox
+
+        photo_names = [photo[0] for photo in photos_to_delete]
+        if messagebox.askyesno(
+            "Delete Photos",
+            f"Are you sure you want to delete {num_to_delete} photos?\n\n"
+            + "\n".join(photo_names[:5])
+            + ("..." if len(photo_names) > 5 else ""),
+        ):
+
+            # Delete files and remove from metadata
+            for filename, _ in photos_to_delete:
+                file_path = os.path.join(self.photo_folder, filename)
+                try:
+                    os.remove(file_path)
+                    if filename in self.metadata_manager.metadata:
+                        del self.metadata_manager.metadata[filename]
+                    print(f"Deleted: {filename}")
+                except Exception as e:
+                    print(f"Error deleting {filename}: {e}")
+
+            # Save updated metadata and refresh
+            self.metadata_manager.save_metadata()
+            self.show_summary_page()  # Refresh summary
 
     def run(self):
         self.root.mainloop()
