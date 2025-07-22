@@ -97,6 +97,12 @@ class MetadataManager:
         skill = self.metadata[filename]["skill"]
         return 100 / (1 + math.exp(-skill))
 
+    def get_comparisons(self, filename):
+        """Get current comparisons for a photo"""
+        if filename not in self.metadata:
+            return 0
+        return self.metadata[filename]["comparisons"]
+
     def update_skills(self, filename_a, filename_b, outcome, k_0=2):
         """Update skills and comparison counts.
         Outcome: 1 (A wins), 0 (B wins), 0.5 (tie), 1.5 (both win), -0.5 (both lose)"""
@@ -140,6 +146,3 @@ class MetadataManager:
         self.metadata[filename_b]["comparisons"] = c_b + 1
 
         self.save_metadata()
-
-        print(f"Updated {filename_a}: skill {s_a:.2f} -> {s_a_new:.2f}")
-        print(f"Updated {filename_b}: skill {s_b:.2f} -> {s_b_new:.2f}")

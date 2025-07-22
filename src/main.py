@@ -1,4 +1,5 @@
 import glob
+import math
 import os
 import random
 import tkinter as tk
@@ -171,62 +172,64 @@ class PhotoManager:
                 print(f"({masked_count} images masked due to low quantile)")
 
     def display_random_pair(self):
-        if len(self.image_files) < 2:
-            print("Need at least 2 different images")
+        # Filter out images below 0.10 quantile before each comparison
+        available_images = []
+        for file_path in self.image_files:
+            filename = os.path.basename(file_path)
+            quantile = self.metadata_manager.get_quantile(filename)
+            if quantile >= 10:  # quantile is 0-100
+                available_images.append(file_path)
+                print(f"Quantile for {filename}: {quantile}")
+
+        print(f"Available images: {len(available_images)}")  # Debug line
+
+        if len(available_images) < 2:
+            print("Not enough images above 10th percentile for comparison!")
+            from tkinter import messagebox
+
+            messagebox.showinfo(
+                "No More Comparisons",
+                "All remaining photos are below 10th percentile. Returning to summary.",
+            )
+            self.show_summary_page()
             return
 
-        # Weighted selection based on distance from 0.10 quantile
-        self.current_images = self.get_weighted_selection(2)
+        self.current_images = self.get_weighted_selection_from_list(available_images, 2)
 
-        # Double-check they're different (shouldn't happen with random.sample, but just in case)
-        while self.current_images[0] == self.current_images[1]:
-            self.current_images = random.sample(self.image_files, 2)
+        # Additional safety check
+        if len(self.current_images) < 2:
+            print("Not enough images returned from selection!")
+            self.show_summary_page()
+            return
+
+        # Debug check for duplicates
+        if (
+            len(self.current_images) == 2
+            and self.current_images[0] == self.current_images[1]
+        ):
+            print(f"DUPLICATE DETECTED: {self.current_images}")
+            return
 
         # Load and display images
         self.show_image(self.current_images[0], self.img1_label)
         self.show_image(self.current_images[1], self.img2_label)
 
-    def get_weighted_selection(self, k=2):
-        """Select images with weighting based on distance from 0.20 quantile"""
-        if len(self.image_files) < k:
-            return self.image_files
+    def get_weighted_selection_from_list(self, image_list, k=2):
+        """Select images from provided list with weighting based on distance from 0.10 quantile"""
 
-        # Calculate weights for each image
-        weights = []
-        filenames = []
+        # Remove any duplicate paths first
+        unique_images = list(set(image_list))
+        print(f"Original list: {len(image_list)}, Unique: {len(unique_images)}")
 
-        for image_path in self.image_files:
-            filename = os.path.basename(image_path)
-            quantile = (
-                self.metadata_manager.get_quantile(filename) / 100
-            )  # Convert to 0-1
+        if len(unique_images) < k:
+            print(f"Warning: Only {len(unique_images)} unique images available")
+            return unique_images
 
-            # Distance from 0.20 - closer to 0.20 = higher weight
-            distance_from_target = abs(quantile - 0.20)
-            # Invert distance so closer = higher weight, add small epsilon to avoid zero
-            weight = 1 / (distance_from_target * distance_from_target + 0.01)
+        # For now, let's just use random selection to eliminate the duplicate issue
+        # We can add weighting back once we confirm duplicates are gone
+        selected = random.sample(unique_images, k)
 
-            weights.append(weight)
-            filenames.append(image_path)
-
-        # Use random.choices for weighted selection without replacement
-        selected = []
-        remaining_files = filenames.copy()
-        remaining_weights = weights.copy()
-
-        for _ in range(k):
-            if not remaining_files:
-                break
-
-            # Select one image based on weights
-            chosen = random.choices(remaining_files, weights=remaining_weights, k=1)[0]
-            selected.append(chosen)
-
-            # Remove selected image from remaining options
-            idx = remaining_files.index(chosen)
-            remaining_files.pop(idx)
-            remaining_weights.pop(idx)
-
+        print(f"Selected: {[os.path.basename(img) for img in selected]}")
         return selected
 
     def reset_all_scores(self):
