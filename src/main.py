@@ -6,6 +6,7 @@ import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter import filedialog, messagebox
 
+import cv2
 from PIL import Image, ImageTk
 
 from metadata_manager import MetadataManager
@@ -113,6 +114,15 @@ class PhotoManager:
         left_filename = os.path.basename(self.current_images[0])
         right_filename = os.path.basename(self.current_images[1])
 
+        # Debug lines
+        print(f"Left image: {self.current_images[0]}")
+        print(f"Right image: {self.current_images[1]}")
+        print(f"Left filename: {left_filename}")
+        print(f"Right filename: {right_filename}")
+        print(f"Left in metadata: {left_filename in self.metadata_manager.metadata}")
+        print(f"Right in metadata: {right_filename in self.metadata_manager.metadata}")
+        print(f"Metadata keys: {list(self.metadata_manager.metadata.keys())}")
+
         # Convert scores to outcome for Elo system
         if left_score == 1 and right_score == 0:  # Left wins
             outcome = "left"
@@ -141,7 +151,20 @@ class PhotoManager:
             self.show_summary_page()  # Show summary instead of going directly to comparison
 
     def load_images(self):
-        extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.tiff"]
+        extensions = [
+            "*.jpg",
+            "*.jpeg",
+            "*.png",
+            "*.bmp",
+            "*.gif",
+            "*.tiff",
+            "*.mp4",
+            "*.avi",
+            "*.mov",
+            "*.mkv",
+            "*.wmv",
+            "*.flv",
+        ]
         all_image_files = []
 
         for ext in extensions:
@@ -256,26 +279,77 @@ class PhotoManager:
 
     def show_image(self, path, label):
         try:
-            img = Image.open(path)
+            filename = os.path.basename(path)
+            file_ext = os.path.splitext(path)[1].lower()
+
+            print(f"Loading image: {filename} ({file_ext})")  # Debug line
+
+            # Check if it's a video file
+            video_extensions = [".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv"]
+
+            if file_ext in video_extensions:
+                print(f"Extracting frame from video: {filename}")  # Debug line
+                # Extract first frame from video
+                img = self.extract_video_frame(path)
+            else:
+                # Regular image
+                img = Image.open(path)
+
             # Resize to fit in half the window
             img.thumbnail((580, 400), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img)
-            filename = os.path.basename(path)
 
-            # # Get metadata
+            # Get metadata
             skill = self.metadata_manager.metadata[filename]["skill"]
             comparisons = self.metadata_manager.metadata[filename]["comparisons"]
             quantile = self.metadata_manager.get_quantile(filename)
 
-            # Create info text
-            info_text = f"{filename}\nSkill: {skill:.2f} | Quantile: {quantile:.1f} | Comparisons: {comparisons}"
+            # Create info text with file type indicator
+            file_type = "VIDEO" if file_ext in video_extensions else "IMAGE"
+            info_text = f"{filename} ({file_type})\nSkill: {skill:.2f} | Quantile: {quantile:.1f} | Comparisons: {comparisons}"
 
             label.configure(
                 image=photo, text=info_text, compound="top", font=("Arial", 10)
             )
             label.image = photo  # Keep reference
         except Exception as e:
-            label.configure(text=f"Error loading image: {os.path.basename(path)}")
+            print(f"Error in show_image for {path}: {e}")  # Better error message
+            label.configure(text=f"Error loading: {os.path.basename(path)}")
+
+    def extract_video_frame(self, video_path):
+        """Extract first frame from video file"""
+        try:
+            print(f"Opening video: {video_path}")  # Debug line
+
+            # Open video
+            cap = cv2.VideoCapture(video_path)
+
+            if not cap.isOpened():
+                print(f"Failed to open video: {video_path}")
+                return Image.new("RGB", (400, 300), color="red")
+
+            # Read first frame
+            ret, frame = cap.read()
+            cap.release()
+
+            if ret:
+                print("Successfully extracted frame")  # Debug line
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                # Convert to PIL Image
+                img = Image.fromarray(frame_rgb)
+                return img
+            else:
+                print("Failed to read frame from video")
+                # Fallback: create a placeholder image
+                return Image.new("RGB", (400, 300), color="gray")
+
+        except ImportError:
+            print("OpenCV not installed. Install with: pip install opencv-python")
+            return Image.new("RGB", (400, 300), color="red")
+        except Exception as e:
+            print(f"Error extracting frame from {video_path}: {e}")
+            return Image.new("RGB", (400, 300), color="gray")
 
     def show_summary_page(self):
         """Display summary of photos ordered by skill"""
@@ -404,10 +478,38 @@ class PhotoManager:
             photo_frame = tk.Frame(scrollable_frame, relief="raised", borderwidth=2)
             photo_frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
 
+            # # Load and display image
+            # try:
+            #     img_path = os.path.join(self.photo_folder, filename)
+            #     img = Image.open(img_path)
+            #     img.thumbnail((280, 280), Image.Resampling.LANCZOS)
+            #     photo = ImageTk.PhotoImage(img)
+
+            #     img_label = tk.Label(photo_frame, image=photo)
+            #     img_label.image = photo  # Keep reference
+            #     img_label.pack()
+
+            #     # Info text
+            #     info_text = f"{filename}\nSkill: {skill:.2f} | Quantile: {quantile:.1f}\nComparisons: {comparisons}"
+            #     info_label = tk.Label(photo_frame, text=info_text, font=("Arial", 9))
+            #     info_label.pack(pady=5)
+
+            # except Exception as e:
+            #     error_label = tk.Label(photo_frame, text=f"Error: {filename}")
+            #     error_label.pack()
             # Load and display image
             try:
                 img_path = os.path.join(self.photo_folder, filename)
-                img = Image.open(img_path)
+                file_ext = os.path.splitext(filename)[1].lower()
+                video_extensions = [".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv"]
+
+                if file_ext in video_extensions:
+                    # Extract first frame from video
+                    img = self.extract_video_frame(img_path)
+                else:
+                    # Regular image
+                    img = Image.open(img_path)
+
                 img.thumbnail((280, 280), Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(img)
 
@@ -415,12 +517,14 @@ class PhotoManager:
                 img_label.image = photo  # Keep reference
                 img_label.pack()
 
-                # Info text
-                info_text = f"{filename}\nSkill: {skill:.2f} | Quantile: {quantile:.1f}\nComparisons: {comparisons}"
+                # Info text with file type indicator
+                file_type = "VIDEO" if file_ext in video_extensions else "IMAGE"
+                info_text = f"{filename} ({file_type})\nSkill: {skill:.2f} | Quantile: {quantile:.1f}\nComparisons: {comparisons}"
                 info_label = tk.Label(photo_frame, text=info_text, font=("Arial", 9))
                 info_label.pack(pady=5)
 
             except Exception as e:
+                print(f"Error loading {filename} in summary: {e}")  # Debug line
                 error_label = tk.Label(photo_frame, text=f"Error: {filename}")
                 error_label.pack()
 

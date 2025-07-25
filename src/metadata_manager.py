@@ -21,13 +21,31 @@ class MetadataManager:
 
         # Add any new photos found in folder
         self._add_new_photos()
+
+        # Add any missing files (including videos)
+        self.add_missing_files_to_metadata()
+
         # Remove any photos no longer in folder
         self._remove_missing_photos()
+
         self.save_metadata()
 
     def _add_new_photos(self):
         """Add metadata entries for new photos"""
-        extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.tiff"]
+        extensions = [
+            "*.jpg",
+            "*.jpeg",
+            "*.png",
+            "*.bmp",
+            "*.gif",
+            "*.tiff",
+            "*.mp4",
+            "*.avi",
+            "*.mov",
+            "*.mkv",
+            "*.wmv",
+            "*.flv",
+        ]  # Added video extensions
         image_files = []
 
         for ext in extensions:
@@ -49,7 +67,20 @@ class MetadataManager:
 
     def _remove_missing_photos(self):
         """Remove metadata entries for photos no longer in folder"""
-        extensions = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif", "*.tiff"]
+        extensions = [
+            "*.jpg",
+            "*.jpeg",
+            "*.png",
+            "*.bmp",
+            "*.gif",
+            "*.tiff",
+            "*.mp4",
+            "*.avi",
+            "*.mov",
+            "*.mkv",
+            "*.wmv",
+            "*.flv",
+        ]  # Added video extensions
         image_files = []
 
         for ext in extensions:
@@ -146,3 +177,45 @@ class MetadataManager:
         self.metadata[filename_b]["comparisons"] = c_b + 1
 
         self.save_metadata()
+
+    def add_missing_files_to_metadata(self):
+        """Add any files that exist in folder but not in metadata"""
+        extensions = [
+            "*.jpg",
+            "*.jpeg",
+            "*.png",
+            "*.bmp",
+            "*.gif",
+            "*.tiff",
+            "*.mp4",
+            "*.avi",
+            "*.mov",
+            "*.mkv",
+            "*.wmv",
+            "*.flv",
+        ]
+        all_files = []
+
+        for ext in extensions:
+            all_files.extend(glob.glob(os.path.join(self.photo_folder, ext)))
+            all_files.extend(glob.glob(os.path.join(self.photo_folder, ext.upper())))
+
+        added_count = 0
+        for file_path in all_files:
+            filename = os.path.basename(file_path)
+            if filename not in self.metadata:
+                self.metadata[filename] = {
+                    "keep": None,
+                    "rating": None,
+                    "tags": [],
+                    "last_compared": None,
+                    "created_date": datetime.now().isoformat(),
+                    "skill": 0,
+                    "comparisons": 0,
+                }
+                added_count += 1
+                print(f"Added missing file to metadata: {filename}")
+
+        if added_count > 0:
+            self.save_metadata()
+            print(f"Added {added_count} missing files to metadata")
