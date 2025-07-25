@@ -474,16 +474,24 @@ class PhotoManager:
             + ("..." if len(photo_names) > 5 else ""),
         ):
 
-            # Delete files and remove from metadata
+            # Create delete folder if it doesn't exist
+            delete_folder = os.path.join(self.photo_folder, "delete")
+            if not os.path.exists(delete_folder):
+                os.makedirs(delete_folder)
+                print(f"Created delete folder: {delete_folder}")
+
+            # Move files to delete folder and remove from metadata
             for filename, _ in photos_to_delete:
                 file_path = os.path.join(self.photo_folder, filename)
+                delete_path = os.path.join(delete_folder, filename)
                 try:
-                    os.remove(file_path)
+                    # Move file to delete folder
+                    os.rename(file_path, delete_path)
                     if filename in self.metadata_manager.metadata:
                         del self.metadata_manager.metadata[filename]
-                    print(f"Deleted: {filename}")
+                    print(f"Moved to delete folder: {filename}")
                 except Exception as e:
-                    print(f"Error deleting {filename}: {e}")
+                    print(f"Error moving {filename}: {e}")
 
             # Save updated metadata and refresh
             self.metadata_manager.save_metadata()
