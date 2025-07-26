@@ -11,25 +11,6 @@ class MetadataManager:
         self.metadata_file = os.path.join(photo_folder, ".photo_metadata.json")
         self.metadata = {}
 
-    def load_metadata(self):
-        """Load existing metadata or create new file"""
-        if os.path.exists(self.metadata_file):
-            with open(self.metadata_file, "r") as f:
-                self.metadata = json.load(f)
-        else:
-            self.metadata = {}
-
-        # Add any new photos found in folder
-        self._add_new_photos()
-
-        # Add any missing files (including videos)
-        self.add_missing_files_to_metadata()
-
-        # Remove any photos no longer in folder
-        self._remove_missing_photos()
-
-        self.save_metadata()
-
     def _add_new_photos(self):
         """Add metadata entries for new photos"""
         extensions = [
@@ -106,16 +87,47 @@ class MetadataManager:
         if files_to_remove:
             print(f"Removed {len(files_to_remove)} missing photos from metadata")
 
-    def save_metadata(self):
-        """Save metadata to JSON file"""
-        with open(self.metadata_file, "w") as f:
-            json.dump(self.metadata, f, indent=2)
+    def add_missing_files_to_metadata(self):
+        """Add any files that exist in folder but not in metadata"""
+        extensions = [
+            "*.jpg",
+            "*.jpeg",
+            "*.png",
+            "*.bmp",
+            "*.gif",
+            "*.tiff",
+            "*.mp4",
+            "*.avi",
+            "*.mov",
+            "*.mkv",
+            "*.wmv",
+            "*.flv",
+        ]
+        all_files = []
 
-    def update_photo(self, filename, **kwargs):
-        """Update metadata for a specific photo"""
-        if filename in self.metadata:
-            self.metadata[filename].update(kwargs)
+        for ext in extensions:
+            all_files.extend(glob.glob(os.path.join(self.photo_folder, ext)))
+            all_files.extend(glob.glob(os.path.join(self.photo_folder, ext.upper())))
+
+        added_count = 0
+        for file_path in all_files:
+            filename = os.path.basename(file_path)
+            if filename not in self.metadata:
+                self.metadata[filename] = {
+                    "keep": None,
+                    "rating": None,
+                    "tags": [],
+                    "last_compared": None,
+                    "created_date": datetime.now().isoformat(),
+                    "skill": 0,
+                    "comparisons": 0,
+                }
+                added_count += 1
+                print(f"Added missing file to metadata: {filename}")
+
+        if added_count > 0:
             self.save_metadata()
+            print(f"Added {added_count} missing files to metadata")
 
     def get_photo_data(self, filename):
         """Get metadata for a specific photo"""
@@ -133,6 +145,36 @@ class MetadataManager:
         if filename not in self.metadata:
             return 0
         return self.metadata[filename]["comparisons"]
+
+    def load_metadata(self):
+        """Load existing metadata or create new file"""
+        if os.path.exists(self.metadata_file):
+            with open(self.metadata_file, "r") as f:
+                self.metadata = json.load(f)
+        else:
+            self.metadata = {}
+
+        # Add any new photos found in folder
+        self._add_new_photos()
+
+        # Add any missing files (including videos)
+        self.add_missing_files_to_metadata()
+
+        # Remove any photos no longer in folder
+        self._remove_missing_photos()
+
+        self.save_metadata()
+
+    def save_metadata(self):
+        """Save metadata to JSON file"""
+        with open(self.metadata_file, "w") as f:
+            json.dump(self.metadata, f, indent=2)
+
+    def update_photo(self, filename, **kwargs):
+        """Update metadata for a specific photo"""
+        if filename in self.metadata:
+            self.metadata[filename].update(kwargs)
+            self.save_metadata()
 
     def update_skills(self, filename_a, filename_b, outcome, k_0=2):
         """Update skills and comparison counts.
@@ -177,45 +219,3 @@ class MetadataManager:
         self.metadata[filename_b]["comparisons"] = c_b + 1
 
         self.save_metadata()
-
-    def add_missing_files_to_metadata(self):
-        """Add any files that exist in folder but not in metadata"""
-        extensions = [
-            "*.jpg",
-            "*.jpeg",
-            "*.png",
-            "*.bmp",
-            "*.gif",
-            "*.tiff",
-            "*.mp4",
-            "*.avi",
-            "*.mov",
-            "*.mkv",
-            "*.wmv",
-            "*.flv",
-        ]
-        all_files = []
-
-        for ext in extensions:
-            all_files.extend(glob.glob(os.path.join(self.photo_folder, ext)))
-            all_files.extend(glob.glob(os.path.join(self.photo_folder, ext.upper())))
-
-        added_count = 0
-        for file_path in all_files:
-            filename = os.path.basename(file_path)
-            if filename not in self.metadata:
-                self.metadata[filename] = {
-                    "keep": None,
-                    "rating": None,
-                    "tags": [],
-                    "last_compared": None,
-                    "created_date": datetime.now().isoformat(),
-                    "skill": 0,
-                    "comparisons": 0,
-                }
-                added_count += 1
-                print(f"Added missing file to metadata: {filename}")
-
-        if added_count > 0:
-            self.save_metadata()
-            print(f"Added {added_count} missing files to metadata")

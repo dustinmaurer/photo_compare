@@ -1,3 +1,5 @@
+import datetime
+import gc
 import glob
 import math
 import os
@@ -7,7 +9,13 @@ import tkinter.ttk as ttk
 from tkinter import filedialog, messagebox
 
 import cv2
+import pythoncom
+import win32api
+import win32com.shell.shell as shell
+import win32con
+from mutagen import File
 from PIL import Image, ImageTk
+from win32com.shell import shellcon
 
 from metadata_manager import MetadataManager
 
@@ -43,6 +51,291 @@ class PhotoManager:
         else:
             print(f"Test folder not found: {test_folder}")
         # Set your test folder path here
+
+    def clear_image_references(self):
+        """Clear all image references to free memory"""
+        if hasattr(self, "img1_label"):
+            self.img1_label.image = None
+        if hasattr(self, "img2_label"):
+            self.img2_label.image = None
+
+    def display_random_pair(self):
+        # Filter out images below 0.10 quantile before each comparison
+        available_images = []
+        for file_path in self.image_files:
+            filename = os.path.basename(file_path)
+            quantile = self.metadata_manager.get_quantile(filename)
+            if quantile >= 10:  # quantile is 0-100
+                available_images.append(file_path)
+                print(f"Quantile for {filename}: {quantile}")
+
+        print(f"Available images: {len(available_images)}")  # Debug line
+
+        if len(available_images) < 2:
+            print("Not enough images above 10th percentile for comparison!")
+            from tkinter import messagebox
+
+            messagebox.showinfo(
+                "No More Comparisons",
+                "All remaining photos are below 10th percentile. Returning to summary.",
+            )
+            self.show_summary_page()
+            return
+
+        self.current_images = self.get_weighted_selection_from_list(available_images, 2)
+
+        # Additional safety check
+        if len(self.current_images) < 2:
+            print("Not enough images returned from selection!")
+            self.show_summary_page()
+            return
+
+        # Debug check for duplicates
+        if (
+            len(self.current_images) == 2
+            and self.current_images[0] == self.current_images[1]
+        ):
+            print(f"DUPLICATE DETECTED: {self.current_images}")
+            return
+
+        # Load and display images
+        self.show_image(self.current_images[0], self.img1_label)
+        self.show_image(self.current_images[1], self.img2_label)
+
+    def extract_video_frame(self, video_path):
+        """Extract first frame from video file"""
+        try:
+            print(f"Opening video: {video_path}")  # Debug line
+
+            # Open video
+            cap = cv2.VideoCapture(video_path)
+
+            if not cap.isOpened():
+                print(f"Failed to open video: {video_path}")
+                return Image.new("RGB", (400, 300), color="red")
+
+            # Read first frame
+            ret, frame = cap.read()
+            cap.release()
+
+            if ret:
+                print("Successfully extracted frame")  # Debug line
+                # Convert BGR to RGB
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                # Convert to PIL Image
+                img = Image.fromarray(frame_rgb)
+                return img
+            else:
+                print("Failed to read frame from video")
+                # Fallback: create a placeholder image
+                return Image.new("RGB", (400, 300), color="gray")
+
+        except ImportError:
+            print("OpenCV not installed. Install with: pip install opencv-python")
+            return Image.new("RGB", (400, 300), color="red")
+        except Exception as e:
+            print(f"Error extracting frame: {e}")
+            return Image.new("RGB", (400, 300), color="gray")
+        finally:
+            # Always release the video capture
+            if cap is not None:
+                cap.release()
+
+    def get_weighted_selection_from_list(self, image_list, k=2):
+        """Select images from provided list with weighting based on distance from 0.10 quantile"""
+
+        # Remove any duplicate paths first
+        unique_images = list(set(image_list))
+        print(f"Original list: {len(image_list)}, Unique: {len(unique_images)}")
+
+        if len(unique_images) < k:
+            print(f"Warning: Only {len(unique_images)} unique images available")
+            return unique_images
+
+        # For now, let's just use random selection to eliminate the duplicate issue
+        # We can add weighting back once we confirm duplicates are gone
+        selected = random.sample(unique_images, k)
+
+        print(f"Selected: {[os.path.basename(img) for img in selected]}")
+        return selected
+
+    def handle_keypress(self, event):
+        if not hasattr(self, "current_images") or len(self.current_images) != 2:
+            return
+
+        if event.keysym == "Left":
+            self.process_comparison(1, 0)  # Left wins
+        elif event.keysym == "Right":
+            self.process_comparison(0, 1)  # Right wins
+        elif event.keysym == "Up":
+            self.process_comparison(1, 1)  # Both win
+        elif event.keysym == "Down":
+            self.process_comparison(0, 0)  # Both lose
+        elif event.keysym == "space":
+            self.process_comparison(0.5, 0.5)  # Tie
+
+    def load_images(self):
+        extensions = [
+            "*.jpg",
+            "*.jpeg",
+            "*.png",
+            "*.bmp",
+            "*.gif",
+            "*.tiff",
+            "*.mp4",
+            "*.avi",
+            "*.mov",
+            "*.mkv",
+            "*.wmv",
+            "*.flv",
+        ]
+        all_image_files = []
+
+        for ext in extensions:
+            all_image_files.extend(glob.glob(os.path.join(self.photo_folder, ext)))
+            all_image_files.extend(
+                glob.glob(os.path.join(self.photo_folder, ext.upper()))
+            )
+
+        # Filter out images with quantile below 0.10 for comparisons
+        self.image_files = []
+        masked_count = 0
+
+        for file_path in all_image_files:
+            filename = os.path.basename(file_path)
+            if self.metadata_manager and filename in self.metadata_manager.metadata:
+                quantile = self.metadata_manager.get_quantile(filename)
+                if quantile < 10:
+                    masked_count += 1
+                    continue  # Skip this image for comparisons
+
+            self.image_files.append(file_path)
+
+        if len(self.image_files) < 2:
+            print(
+                f"Warning: Only {len(self.image_files)} images available for comparison"
+            )
+            if masked_count > 0:
+                print(f"({masked_count} images masked due to low quantile)")
+
+    def open_video(self, video_path):
+        """Open video file with preferred video player"""
+        import os
+        import platform
+        import subprocess
+
+        try:
+            if platform.system() == "Windows":
+                # Try different players in order of preference
+                players = [
+                    r"C:\Program Files\VideoLAN\VLC\vlc.exe",
+                    r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
+                    r"C:\Program Files\Windows Media Player\wmplayer.exe",
+                ]
+
+                for player in players:
+                    if os.path.exists(player):
+                        subprocess.Popen([player, video_path])
+                        # print(
+                        #     # f"Opening video with {os.path.basename(player)}: {os.path.basename(video_path)}"
+                        # )
+                        return
+
+                # Fallback to default association
+                os.startfile(video_path)
+                # print(f"Opening video with default app: {os.path.basename(video_path)}")
+
+            elif platform.system() == "Darwin":  # macOS
+                subprocess.Popen(["open", video_path])
+            else:  # Linux
+                subprocess.Popen(["xdg-open", video_path])
+
+        except Exception as e:
+            # print(f"Error opening video {video_path}: {e}")
+            from tkinter import messagebox
+
+            messagebox.showerror("Error", f"Could not open video: {e}")
+
+    def process_comparison(self, left_score, right_score):
+        if not self.metadata_manager:
+            return
+
+        left_filename = os.path.basename(self.current_images[0])
+        right_filename = os.path.basename(self.current_images[1])
+
+        # Debug lines
+        # print(f"Left image: {self.current_images[0]}")
+        # print(f"Right image: {self.current_images[1]}")
+        # print(f"Left filename: {left_filename}")
+        # print(f"Right filename: {right_filename}")
+        # print(f"Left in metadata: {left_filename in self.metadata_manager.metadata}")
+        # print(f"Right in metadata: {right_filename in self.metadata_manager.metadata}")
+        # print(f"Metadata keys: {list(self.metadata_manager.metadata.keys())}")
+
+        # Convert scores to outcome for Elo system
+        if left_score == 1 and right_score == 0:  # Left wins
+            outcome = "left"
+        elif left_score == 0 and right_score == 1:  # Right wins
+            outcome = "right"
+        elif left_score == 1 and right_score == 1:  # Both win
+            outcome = "both"
+        elif left_score == 0 and right_score == 0:  # Both lose
+            outcome = "neither"
+        else:  # Tie
+            outcome = "tie"
+
+        # Update Elo ratings
+        self.metadata_manager.update_skills(left_filename, right_filename, outcome)
+
+        self.metadata_manager.update_skills(left_filename, right_filename, outcome)
+
+        # Update file tags with new quantiles
+        left_path = self.current_images[0]
+        right_path = self.current_images[1]
+        left_quantile = self.metadata_manager.get_quantile(left_filename)
+        right_quantile = self.metadata_manager.get_quantile(right_filename)
+
+        # Show next pair
+        self.display_random_pair()
+
+        # Force garbage collection every 10 comparisons
+        if not hasattr(self, "comparison_count"):
+            self.comparison_count = 0
+        self.comparison_count += 1
+
+        if self.comparison_count % 10 == 0:
+            gc.collect()
+
+    def reset_all_scores(self):
+        """Reset all photo skills and comparison counts"""
+        if not self.metadata_manager:
+            return
+
+        # Confirm reset
+        from tkinter import messagebox
+
+        if messagebox.askyesno(
+            "Reset Scores",
+            "Are you sure you want to reset all photo scores? This cannot be undone.",
+        ):
+            for filename in self.metadata_manager.metadata:
+                self.metadata_manager.metadata[filename]["skill"] = 0
+                self.metadata_manager.metadata[filename]["comparisons"] = 0
+
+            self.metadata_manager.save_metadata()
+            print("All scores reset to default")
+
+            # Refresh the summary page
+            self.show_summary_page()
+
+    def select_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.photo_folder = folder
+            self.metadata_manager = MetadataManager(folder)
+            self.metadata_manager.load_metadata()
+            self.load_images()
+            self.show_summary_page()  # Show summary instead of going directly to comparison
 
     def setup_ui(self):
         # Top button frame
@@ -92,203 +385,15 @@ class PhotoManager:
         self.root.bind("<Key>", self.handle_keypress)
         self.root.focus_set()  # Ensure window can receive key events
 
-    def handle_keypress(self, event):
-        if not hasattr(self, "current_images") or len(self.current_images) != 2:
-            return
-
-        if event.keysym == "Left":
-            self.process_comparison(1, 0)  # Left wins
-        elif event.keysym == "Right":
-            self.process_comparison(0, 1)  # Right wins
-        elif event.keysym == "Up":
-            self.process_comparison(1, 1)  # Both win
-        elif event.keysym == "Down":
-            self.process_comparison(0, 0)  # Both lose
-        elif event.keysym == "space":
-            self.process_comparison(0.5, 0.5)  # Tie
-
-    def process_comparison(self, left_score, right_score):
-        if not self.metadata_manager:
-            return
-
-        left_filename = os.path.basename(self.current_images[0])
-        right_filename = os.path.basename(self.current_images[1])
-
-        # Debug lines
-        print(f"Left image: {self.current_images[0]}")
-        print(f"Right image: {self.current_images[1]}")
-        print(f"Left filename: {left_filename}")
-        print(f"Right filename: {right_filename}")
-        print(f"Left in metadata: {left_filename in self.metadata_manager.metadata}")
-        print(f"Right in metadata: {right_filename in self.metadata_manager.metadata}")
-        print(f"Metadata keys: {list(self.metadata_manager.metadata.keys())}")
-
-        # Convert scores to outcome for Elo system
-        if left_score == 1 and right_score == 0:  # Left wins
-            outcome = "left"
-        elif left_score == 0 and right_score == 1:  # Right wins
-            outcome = "right"
-        elif left_score == 1 and right_score == 1:  # Both win
-            outcome = "both"
-        elif left_score == 0 and right_score == 0:  # Both lose
-            outcome = "neither"
-        else:  # Tie
-            outcome = "tie"
-
-        # Update Elo ratings
-        self.metadata_manager.update_skills(left_filename, right_filename, outcome)
-
-        # Show next pair
-        self.display_random_pair()
-
-    def select_folder(self):
-        folder = filedialog.askdirectory()
-        if folder:
-            self.photo_folder = folder
-            self.metadata_manager = MetadataManager(folder)
-            self.metadata_manager.load_metadata()
-            self.load_images()
-            self.show_summary_page()  # Show summary instead of going directly to comparison
-
-    def load_images(self):
-        extensions = [
-            "*.jpg",
-            "*.jpeg",
-            "*.png",
-            "*.bmp",
-            "*.gif",
-            "*.tiff",
-            "*.mp4",
-            "*.avi",
-            "*.mov",
-            "*.mkv",
-            "*.wmv",
-            "*.flv",
-        ]
-        all_image_files = []
-
-        for ext in extensions:
-            all_image_files.extend(glob.glob(os.path.join(self.photo_folder, ext)))
-            all_image_files.extend(
-                glob.glob(os.path.join(self.photo_folder, ext.upper()))
-            )
-
-        # Filter out images with quantile below 0.10 for comparisons
-        self.image_files = []
-        masked_count = 0
-
-        for file_path in all_image_files:
-            filename = os.path.basename(file_path)
-            if self.metadata_manager and filename in self.metadata_manager.metadata:
-                quantile = self.metadata_manager.get_quantile(filename)
-                if quantile < 10:
-                    masked_count += 1
-                    continue  # Skip this image for comparisons
-
-            self.image_files.append(file_path)
-
-        if len(self.image_files) < 2:
-            print(
-                f"Warning: Only {len(self.image_files)} images available for comparison"
-            )
-            if masked_count > 0:
-                print(f"({masked_count} images masked due to low quantile)")
-
-    def display_random_pair(self):
-        # Filter out images below 0.10 quantile before each comparison
-        available_images = []
-        for file_path in self.image_files:
-            filename = os.path.basename(file_path)
-            quantile = self.metadata_manager.get_quantile(filename)
-            if quantile >= 10:  # quantile is 0-100
-                available_images.append(file_path)
-                print(f"Quantile for {filename}: {quantile}")
-
-        print(f"Available images: {len(available_images)}")  # Debug line
-
-        if len(available_images) < 2:
-            print("Not enough images above 10th percentile for comparison!")
-            from tkinter import messagebox
-
-            messagebox.showinfo(
-                "No More Comparisons",
-                "All remaining photos are below 10th percentile. Returning to summary.",
-            )
-            self.show_summary_page()
-            return
-
-        self.current_images = self.get_weighted_selection_from_list(available_images, 2)
-
-        # Additional safety check
-        if len(self.current_images) < 2:
-            print("Not enough images returned from selection!")
-            self.show_summary_page()
-            return
-
-        # Debug check for duplicates
-        if (
-            len(self.current_images) == 2
-            and self.current_images[0] == self.current_images[1]
-        ):
-            print(f"DUPLICATE DETECTED: {self.current_images}")
-            return
-
-        # Load and display images
-        self.show_image(self.current_images[0], self.img1_label)
-        self.show_image(self.current_images[1], self.img2_label)
-
-    def get_weighted_selection_from_list(self, image_list, k=2):
-        """Select images from provided list with weighting based on distance from 0.10 quantile"""
-
-        # Remove any duplicate paths first
-        unique_images = list(set(image_list))
-        print(f"Original list: {len(image_list)}, Unique: {len(unique_images)}")
-
-        if len(unique_images) < k:
-            print(f"Warning: Only {len(unique_images)} unique images available")
-            return unique_images
-
-        # For now, let's just use random selection to eliminate the duplicate issue
-        # We can add weighting back once we confirm duplicates are gone
-        selected = random.sample(unique_images, k)
-
-        print(f"Selected: {[os.path.basename(img) for img in selected]}")
-        return selected
-
-    def reset_all_scores(self):
-        """Reset all photo skills and comparison counts"""
-        if not self.metadata_manager:
-            return
-
-        # Confirm reset
-        from tkinter import messagebox
-
-        if messagebox.askyesno(
-            "Reset Scores",
-            "Are you sure you want to reset all photo scores? This cannot be undone.",
-        ):
-            for filename in self.metadata_manager.metadata:
-                self.metadata_manager.metadata[filename]["skill"] = 0
-                self.metadata_manager.metadata[filename]["comparisons"] = 0
-
-            self.metadata_manager.save_metadata()
-            print("All scores reset to default")
-
-            # Refresh the summary page
-            self.show_summary_page()
-
     def show_image(self, path, label):
         try:
             filename = os.path.basename(path)
             file_ext = os.path.splitext(path)[1].lower()
 
-            print(f"Loading image: {filename} ({file_ext})")  # Debug line
-
             # Check if it's a video file
             video_extensions = [".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv"]
 
             if file_ext in video_extensions:
-                print(f"Extracting frame from video: {filename}")  # Debug line
                 # Extract first frame from video
                 img = self.extract_video_frame(path)
             else:
@@ -312,44 +417,17 @@ class PhotoManager:
                 image=photo, text=info_text, compound="top", font=("Arial", 10)
             )
             label.image = photo  # Keep reference
-        except Exception as e:
-            print(f"Error in show_image for {path}: {e}")  # Better error message
-            label.configure(text=f"Error loading: {os.path.basename(path)}")
 
-    def extract_video_frame(self, video_path):
-        """Extract first frame from video file"""
-        try:
-            print(f"Opening video: {video_path}")  # Debug line
-
-            # Open video
-            cap = cv2.VideoCapture(video_path)
-
-            if not cap.isOpened():
-                print(f"Failed to open video: {video_path}")
-                return Image.new("RGB", (400, 300), color="red")
-
-            # Read first frame
-            ret, frame = cap.read()
-            cap.release()
-
-            if ret:
-                print("Successfully extracted frame")  # Debug line
-                # Convert BGR to RGB
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                # Convert to PIL Image
-                img = Image.fromarray(frame_rgb)
-                return img
+            # Add click event for videos
+            if file_ext in video_extensions:
+                label.configure(cursor="hand2")  # Change cursor to indicate clickable
+                label.bind("<Button-1>", lambda e: self.open_video(path))
             else:
-                print("Failed to read frame from video")
-                # Fallback: create a placeholder image
-                return Image.new("RGB", (400, 300), color="gray")
+                label.unbind("<Button-1>")  # Remove click event for images
+                label.configure(cursor="")
 
-        except ImportError:
-            print("OpenCV not installed. Install with: pip install opencv-python")
-            return Image.new("RGB", (400, 300), color="red")
         except Exception as e:
-            print(f"Error extracting frame from {video_path}: {e}")
-            return Image.new("RGB", (400, 300), color="gray")
+            label.configure(text=f"Error loading image: {os.path.basename(path)}")
 
     def show_summary_page(self):
         """Display summary of photos ordered by skill"""
@@ -368,7 +446,7 @@ class PhotoManager:
 
         self.root.geometry(f"{window_width}x{window_height}")
 
-        # Button to start comparing
+        # Button frame
         button_frame = tk.Frame(self.root)
         button_frame.pack(side="top", pady=10)
 
@@ -401,39 +479,35 @@ class PhotoManager:
         )
         reset_btn.pack(side="left", padx=10)
 
-        # Delete photos section
-        delete_frame = tk.Frame(button_frame)
-        delete_frame.pack(side="left", padx=20)
-
-        tk.Label(delete_frame, text="Delete bottom", font=("Arial", 12)).pack(
-            side="left"
-        )
-
-        # Initialize delete_count if it doesn't exist
-        if not hasattr(self, "delete_count"):
-            self.delete_count = tk.IntVar(value=1)
-
-        delete_spinbox = tk.Spinbox(
-            delete_frame,
-            from_=0,
-            to=10,
-            width=3,
-            textvariable=self.delete_count,
+        # Button to add quantile prefixes
+        add_prefix_btn = tk.Button(
+            button_frame,
+            text="Add Prefix",
+            command=self.add_prefix_to_files,
             font=("Arial", 12),
+            bg="lightgreen",
         )
-        delete_spinbox.pack(side="left", padx=5)
+        add_prefix_btn.pack(side="left", padx=5)
 
-        tk.Label(delete_frame, text="photos", font=("Arial", 12)).pack(side="left")
-
-        delete_btn = tk.Button(
-            delete_frame,
-            text="Delete Photos",
-            command=self.delete_bottom_photos,
+        # Button to remove quantile prefixes
+        remove_prefix_btn = tk.Button(
+            button_frame,
+            text="Remove Prefix",
+            command=self.remove_prefix_from_files,
             font=("Arial", 12),
-            bg="red",
-            fg="white",
+            bg="lightyellow",
         )
-        delete_btn.pack(side="left", padx=5)
+        remove_prefix_btn.pack(side="left", padx=5)
+
+        # Button to sync metadata with manually renamed files
+        sync_btn = tk.Button(
+            button_frame,
+            text="Sync Files",
+            command=self.fix_invisible_files,
+            font=("Arial", 12),
+            bg="lightcyan",
+        )
+        sync_btn.pack(side="left", padx=10)
 
         # Header
         header = tk.Label(
@@ -478,25 +552,6 @@ class PhotoManager:
             photo_frame = tk.Frame(scrollable_frame, relief="raised", borderwidth=2)
             photo_frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
 
-            # # Load and display image
-            # try:
-            #     img_path = os.path.join(self.photo_folder, filename)
-            #     img = Image.open(img_path)
-            #     img.thumbnail((280, 280), Image.Resampling.LANCZOS)
-            #     photo = ImageTk.PhotoImage(img)
-
-            #     img_label = tk.Label(photo_frame, image=photo)
-            #     img_label.image = photo  # Keep reference
-            #     img_label.pack()
-
-            #     # Info text
-            #     info_text = f"{filename}\nSkill: {skill:.2f} | Quantile: {quantile:.1f}\nComparisons: {comparisons}"
-            #     info_label = tk.Label(photo_frame, text=info_text, font=("Arial", 9))
-            #     info_label.pack(pady=5)
-
-            # except Exception as e:
-            #     error_label = tk.Label(photo_frame, text=f"Error: {filename}")
-            #     error_label.pack()
             # Load and display image
             try:
                 img_path = os.path.join(self.photo_folder, filename)
@@ -517,6 +572,13 @@ class PhotoManager:
                 img_label.image = photo  # Keep reference
                 img_label.pack()
 
+                # Add click event for videos
+                if file_ext in video_extensions:
+                    img_label.configure(cursor="hand2")
+                    img_label.bind(
+                        "<Button-1>", lambda e, path=img_path: self.open_video(path)
+                    )
+
                 # Info text with file type indicator
                 file_type = "VIDEO" if file_ext in video_extensions else "IMAGE"
                 info_text = f"{filename} ({file_type})\nSkill: {skill:.2f} | Quantile: {quantile:.1f}\nComparisons: {comparisons}"
@@ -524,7 +586,7 @@ class PhotoManager:
                 info_label.pack(pady=5)
 
             except Exception as e:
-                print(f"Error loading {filename} in summary: {e}")  # Debug line
+                print(f"Error loading {filename} in summary: {e}")
                 error_label = tk.Label(photo_frame, text=f"Error: {filename}")
                 error_label.pack()
 
@@ -540,66 +602,581 @@ class PhotoManager:
         self.setup_ui()
         self.display_random_pair()
 
-    def delete_bottom_photos(self):
-        """Delete the bottom N photos based on skill ranking"""
+    def update_file_names(self):
+        """Update all file names to include quantile prefix (QXXX_)"""
         if not self.metadata_manager:
+            messagebox.showwarning("No Folder", "Please select a photo folder first")
             return
 
-        num_to_delete = self.delete_count.get()
-        if num_to_delete == 0:
-            return
+        # Collect files that need renaming
+        files_to_rename = []
+        already_renamed = []
 
-        # Get photos sorted by skill (lowest first)
-        photos_data = []
         for filename, data in self.metadata_manager.metadata.items():
-            if os.path.exists(os.path.join(self.photo_folder, filename)):
-                photos_data.append((filename, data["skill"]))
+            file_path = os.path.join(self.photo_folder, filename)
 
-        photos_data.sort(key=lambda x: x[1])  # Sort by skill (lowest first)
+            if not os.path.exists(file_path):
+                continue
 
-        if num_to_delete > len(photos_data):
-            from tkinter import messagebox
+            # Check if file already has quantile prefix
+            if filename.startswith("Q") and "_" in filename[:5]:
+                # Check if it matches current quantile
+                current_quantile = self.metadata_manager.get_quantile(filename)
+                # Convert to 3 digits including first decimal place: 50.6 -> 506
+                quantile_int = int(current_quantile * 10)
+                expected_prefix = f"Q{quantile_int:03d}_"
 
-            messagebox.showwarning(
-                "Warning", f"Only {len(photos_data)} photos available"
+                if filename.startswith(expected_prefix):
+                    already_renamed.append(filename)
+                    continue
+                else:
+                    # File has old quantile prefix, needs updating
+                    files_to_rename.append((file_path, filename))
+            else:
+                # File has no quantile prefix
+                files_to_rename.append((file_path, filename))
+
+        if not files_to_rename:
+            messagebox.showinfo(
+                "Already Updated",
+                f"All {len(already_renamed)} files already have correct quantile prefixes",
             )
             return
 
-        photos_to_delete = photos_data[:num_to_delete]
-
-        # Confirm deletion
-        from tkinter import messagebox
-
-        photo_names = [photo[0] for photo in photos_to_delete]
-        if messagebox.askyesno(
-            "Delete Photos",
-            f"Are you sure you want to delete {num_to_delete} photos?\n\n"
-            + "\n".join(photo_names[:5])
-            + ("..." if len(photo_names) > 5 else ""),
+        # Show confirmation dialog
+        if not messagebox.askyesno(
+            "Rename Files",
+            f"This will rename {len(files_to_rename)} files with quantile prefixes.\n"
+            f"{len(already_renamed)} files already have correct prefixes.\n\n"
+            "Do you want to continue?",
         ):
+            return
 
-            # Create delete folder if it doesn't exist
-            delete_folder = os.path.join(self.photo_folder, "delete")
-            if not os.path.exists(delete_folder):
-                os.makedirs(delete_folder)
-                print(f"Created delete folder: {delete_folder}")
+        # Create progress window
+        progress_window = tk.Toplevel(self.root)
+        progress_window.title("Renaming Files")
+        progress_window.geometry("500x150")
+        progress_window.grab_set()
 
-            # Move files to delete folder and remove from metadata
-            for filename, _ in photos_to_delete:
-                file_path = os.path.join(self.photo_folder, filename)
-                delete_path = os.path.join(delete_folder, filename)
-                try:
-                    # Move file to delete folder
-                    os.rename(file_path, delete_path)
-                    if filename in self.metadata_manager.metadata:
-                        del self.metadata_manager.metadata[filename]
-                    print(f"Moved to delete folder: {filename}")
-                except Exception as e:
-                    print(f"Error moving {filename}: {e}")
+        # Center the window
+        progress_window.transient(self.root)
+        progress_window.geometry(
+            "+%d+%d" % (self.root.winfo_rootx() + 50, self.root.winfo_rooty() + 50)
+        )
 
-            # Save updated metadata and refresh
+        progress_label = tk.Label(progress_window, text="Starting...", wraplength=450)
+        progress_label.pack(pady=10)
+
+        progress_bar = ttk.Progressbar(progress_window, mode="determinate")
+        progress_bar.pack(pady=10, padx=20, fill="x")
+        progress_bar["maximum"] = len(files_to_rename)
+
+        status_label = tk.Label(progress_window, text="", font=("Arial", 8))
+        status_label.pack(pady=5)
+
+        success_count = 0
+        failed_renames = []
+        new_metadata = {}
+
+        for i, (file_path, old_filename) in enumerate(files_to_rename):
+            progress_label.config(text=f"Renaming: {old_filename}")
+            progress_bar["value"] = i + 1
+            status_label.config(text=f"{i+1}/{len(files_to_rename)} files processed")
+            progress_window.update()
+
+            try:
+                # Calculate new filename
+                quantile = self.metadata_manager.get_quantile(old_filename)
+                # Convert to 3 digits including first decimal place: 50.6 -> 506
+                quantile_int = int(quantile * 10)
+                quantile_prefix = f"Q{quantile_int:03d}_"
+
+                # Remove old quantile prefix if it exists
+                if old_filename.startswith("Q") and "_" in old_filename[:5]:
+                    # Find the first underscore and take everything after it
+                    underscore_pos = old_filename.find("_")
+                    base_filename = old_filename[underscore_pos + 1 :]
+                else:
+                    base_filename = old_filename
+
+                new_filename = quantile_prefix + base_filename
+                new_file_path = os.path.join(self.photo_folder, new_filename)
+
+                # Check if new filename already exists
+                if os.path.exists(new_file_path) and new_file_path != file_path:
+                    print(
+                        f"Warning: {new_filename} already exists, skipping {old_filename}"
+                    )
+                    failed_renames.append((old_filename, "File already exists"))
+                    continue
+
+                # Rename the file
+                os.rename(file_path, new_file_path)
+
+                # Update metadata with new filename
+                old_data = self.metadata_manager.metadata[old_filename]
+                new_metadata[new_filename] = old_data
+
+                print(f"Renamed: {old_filename} -> {new_filename}")
+                success_count += 1
+
+            except Exception as e:
+                print(f"Failed to rename {old_filename}: {e}")
+                failed_renames.append((old_filename, str(e)))
+
+        # Update metadata with new filenames
+        if new_metadata:
+            # Remove old entries and add new ones
+            for old_filename, _ in files_to_rename:
+                if old_filename in self.metadata_manager.metadata:
+                    # Check if we successfully renamed this file
+                    quantile = self.metadata_manager.get_quantile(old_filename)
+                    # Convert to 3 digits including first decimal place: 50.6 -> 506
+                    quantile_int = int(quantile * 10)
+                    quantile_prefix = f"Q{quantile_int:03d}_"
+
+                    if old_filename.startswith("Q") and "_" in old_filename[:5]:
+                        underscore_pos = old_filename.find("_")
+                        base_filename = old_filename[underscore_pos + 1 :]
+                    else:
+                        base_filename = old_filename
+
+                    new_filename = quantile_prefix + base_filename
+
+                    if new_filename in new_metadata:
+                        # Successfully renamed, remove old entry
+                        del self.metadata_manager.metadata[old_filename]
+
+            # Add new entries
+            self.metadata_manager.metadata.update(new_metadata)
             self.metadata_manager.save_metadata()
-            self.show_summary_page()  # Refresh summary
+
+        progress_window.destroy()
+
+        # Show results
+        if failed_renames:
+            error_msg = f"Renamed {success_count}/{len(files_to_rename)} files\n\nFailed renames:\n"
+            error_msg += "\n".join(
+                [f"• {name}: {error}" for name, error in failed_renames[:10]]
+            )
+            if len(failed_renames) > 10:
+                error_msg += f"\n... and {len(failed_renames) - 10} more"
+            messagebox.showwarning("Rename Complete with Errors", error_msg)
+        else:
+            messagebox.showinfo(
+                "Rename Complete",
+                f"Successfully renamed {success_count} files with quantile prefixes!",
+            )
+
+        # Refresh the summary page to show new names
+        self.show_summary_page()
+
+    def add_prefix_to_files(self):
+        """Add quantile prefix to files that don't have it or need updating"""
+        if not self.metadata_manager:
+            messagebox.showwarning("No Folder", "Please select a photo folder first")
+            return
+
+        # Collect files that need prefix added/updated
+        files_to_rename = []
+        already_prefixed = []
+
+        for filename, data in self.metadata_manager.metadata.items():
+            file_path = os.path.join(self.photo_folder, filename)
+
+            if not os.path.exists(file_path):
+                continue
+
+            # Check if file already has correct quantile prefix
+            if filename.startswith("Q") and "_" in filename[:5]:
+                # Check if it matches current quantile
+                current_quantile = self.metadata_manager.get_quantile(filename)
+                quantile_int = int(current_quantile * 10)
+                expected_prefix = f"Q{quantile_int:03d}_"
+
+                if filename.startswith(expected_prefix):
+                    already_prefixed.append(filename)
+                    continue
+                else:
+                    # File has old/wrong quantile prefix, needs updating
+                    files_to_rename.append((file_path, filename))
+            else:
+                # File has no quantile prefix
+                files_to_rename.append((file_path, filename))
+
+        if not files_to_rename:
+            messagebox.showinfo(
+                "Already Prefixed",
+                f"All {len(already_prefixed)} files already have correct quantile prefixes",
+            )
+            return
+
+        # Show confirmation dialog
+        if not messagebox.askyesno(
+            "Add Prefixes",
+            f"This will add/update quantile prefixes on {len(files_to_rename)} files.\n"
+            f"{len(already_prefixed)} files already have correct prefixes.\n\n"
+            "Do you want to continue?",
+        ):
+            return
+
+        success_count = self._rename_files_with_progress(
+            files_to_rename, add_prefix=True
+        )
+
+        # Show results
+        messagebox.showinfo(
+            "Prefixes Added",
+            f"Successfully added prefixes to {success_count}/{len(files_to_rename)} files!",
+        )
+
+        # Refresh the summary page
+        self.show_summary_page()
+
+    def remove_prefix_from_files(self):
+        """Remove quantile prefix from files that have it"""
+        if not self.metadata_manager:
+            messagebox.showwarning("No Folder", "Please select a photo folder first")
+            return
+
+        # Collect files that have prefixes to remove
+        files_to_rename = []
+        no_prefix = []
+
+        for filename, data in self.metadata_manager.metadata.items():
+            file_path = os.path.join(self.photo_folder, filename)
+
+            if not os.path.exists(file_path):
+                continue
+
+            # Check if file has quantile prefix
+            if filename.startswith("Q") and "_" in filename[:5]:
+                files_to_rename.append((file_path, filename))
+            else:
+                no_prefix.append(filename)
+
+        if not files_to_rename:
+            messagebox.showinfo(
+                "No Prefixes",
+                f"No files have quantile prefixes to remove.\n"
+                f"All {len(no_prefix)} files are already without prefixes.",
+            )
+            return
+
+        # Show confirmation dialog
+        if not messagebox.askyesno(
+            "Remove Prefixes",
+            f"This will remove quantile prefixes from {len(files_to_rename)} files.\n"
+            f"{len(no_prefix)} files already have no prefixes.\n\n"
+            "Do you want to continue?",
+        ):
+            return
+
+        success_count = self._rename_files_with_progress(
+            files_to_rename, add_prefix=False
+        )
+
+        # Show results
+        messagebox.showinfo(
+            "Prefixes Removed",
+            f"Successfully removed prefixes from {success_count}/{len(files_to_rename)} files!",
+        )
+
+        # Refresh the summary page
+        self.show_summary_page()
+
+    def _rename_files_with_progress(self, files_to_rename, add_prefix=True):
+        """Helper method to rename files with progress dialog"""
+        # Create progress window
+        progress_window = tk.Toplevel(self.root)
+        action = "Adding" if add_prefix else "Removing"
+        progress_window.title(f"{action} Prefixes")
+        progress_window.geometry("500x150")
+        progress_window.grab_set()
+
+        # Center the window
+        progress_window.transient(self.root)
+        progress_window.geometry(
+            "+%d+%d" % (self.root.winfo_rootx() + 50, self.root.winfo_rooty() + 50)
+        )
+
+        progress_label = tk.Label(progress_window, text="Starting...", wraplength=450)
+        progress_label.pack(pady=10)
+
+        progress_bar = ttk.Progressbar(progress_window, mode="determinate")
+        progress_bar.pack(pady=10, padx=20, fill="x")
+        progress_bar["maximum"] = len(files_to_rename)
+
+        status_label = tk.Label(progress_window, text="", font=("Arial", 8))
+        status_label.pack(pady=5)
+
+        success_count = 0
+        failed_renames = []
+        new_metadata = {}
+
+        for i, (file_path, old_filename) in enumerate(files_to_rename):
+            action_text = "Adding prefix to" if add_prefix else "Removing prefix from"
+            progress_label.config(text=f"{action_text}: {old_filename}")
+            progress_bar["value"] = i + 1
+            status_label.config(text=f"{i+1}/{len(files_to_rename)} files processed")
+            progress_window.update()
+
+            try:
+                if add_prefix:
+                    # Calculate new filename with prefix
+                    quantile = self.metadata_manager.get_quantile(old_filename)
+                    quantile_int = int(quantile * 10)
+                    quantile_prefix = f"Q{quantile_int:03d}_"
+
+                    # Remove old quantile prefix if it exists
+                    if old_filename.startswith("Q") and "_" in old_filename[:5]:
+                        underscore_pos = old_filename.find("_")
+                        base_filename = old_filename[underscore_pos + 1 :]
+                    else:
+                        base_filename = old_filename
+
+                    new_filename = quantile_prefix + base_filename
+                else:
+                    # Remove prefix to get base filename
+                    if old_filename.startswith("Q") and "_" in old_filename[:5]:
+                        underscore_pos = old_filename.find("_")
+                        new_filename = old_filename[underscore_pos + 1 :]
+                    else:
+                        # No prefix to remove, skip
+                        continue
+
+                new_file_path = os.path.join(self.photo_folder, new_filename)
+
+                # Check if new filename already exists
+                if os.path.exists(new_file_path) and new_file_path != file_path:
+                    print(
+                        f"Warning: {new_filename} already exists, skipping {old_filename}"
+                    )
+                    failed_renames.append((old_filename, "File already exists"))
+                    continue
+
+                # Rename the file
+                os.rename(file_path, new_file_path)
+
+                # Update metadata with new filename
+                old_data = self.metadata_manager.metadata[old_filename]
+                new_metadata[new_filename] = old_data
+
+                print(f"Renamed: {old_filename} -> {new_filename}")
+                success_count += 1
+
+            except Exception as e:
+                print(f"Failed to rename {old_filename}: {e}")
+                failed_renames.append((old_filename, str(e)))
+
+        # Update metadata with new filenames
+        if new_metadata:
+            # Remove old entries and add new ones
+            for old_filename, _ in files_to_rename:
+                if (
+                    old_filename in self.metadata_manager.metadata
+                    and old_filename not in new_metadata.values()
+                ):
+                    # Only delete if we successfully created a new entry
+                    for new_name in new_metadata.keys():
+                        if (
+                            new_metadata[new_name]
+                            == self.metadata_manager.metadata[old_filename]
+                        ):
+                            del self.metadata_manager.metadata[old_filename]
+                            break
+
+            # Add new entries
+            self.metadata_manager.metadata.update(new_metadata)
+            self.metadata_manager.save_metadata()
+
+        progress_window.destroy()
+
+        # Show errors if any
+        if failed_renames:
+            error_msg = f"Processed {success_count}/{len(files_to_rename)} files\n\nFailed renames:\n"
+            error_msg += "\n".join(
+                [f"• {name}: {error}" for name, error in failed_renames[:10]]
+            )
+            if len(failed_renames) > 10:
+                error_msg += f"\n... and {len(failed_renames) - 10} more"
+            messagebox.showwarning("Some Files Failed", error_msg)
+
+        return success_count
+
+    def get_base_filename(self, filename):
+        """Get the base filename without quantile prefix"""
+        if filename.startswith("Q") and "_" in filename[:5]:
+            underscore_pos = filename.find("_")
+            return filename[underscore_pos + 1 :]
+        return filename
+
+    def get_quantile_from_filename(self, filename):
+        """Extract quantile from filename if it has the QXXX_ prefix"""
+        if filename.startswith("Q") and "_" in filename[:5]:
+            try:
+                # Extract the number between Q and _
+                underscore_pos = filename.find("_")
+                quantile_str = filename[1:underscore_pos]
+                # Convert back from 3-digit format: 506 -> 50.6
+                quantile_int = int(quantile_str)
+                return quantile_int / 10.0
+            except (ValueError, IndexError):
+                pass
+        return None
+
+    def sync_metadata_with_files(self):
+        """Sync metadata when files have been manually renamed"""
+        if not self.metadata_manager:
+            return
+
+        # Get all actual files in the directory
+        extensions = [
+            "*.jpg",
+            "*.jpeg",
+            "*.png",
+            "*.bmp",
+            "*.gif",
+            "*.tiff",
+            "*.mp4",
+            "*.avi",
+            "*.mov",
+            "*.mkv",
+            "*.wmv",
+            "*.flv",
+        ]
+        actual_files = set()
+
+        for ext in extensions:
+            actual_files.update(glob.glob(os.path.join(self.photo_folder, ext)))
+            actual_files.update(glob.glob(os.path.join(self.photo_folder, ext.upper())))
+
+        actual_filenames = {os.path.basename(f) for f in actual_files}
+        metadata_filenames = set(self.metadata_manager.metadata.keys())
+
+        # Find files that exist but aren't in metadata (manually renamed)
+        missing_from_metadata = actual_filenames - metadata_filenames
+
+        # Find metadata entries that don't have corresponding files
+        missing_files = metadata_filenames - actual_filenames
+
+        updates_made = 0
+
+        # Try to match missing files with existing files
+        for missing_metadata_name in missing_files:
+            # Get the base name without quantile prefix
+            base_name = self.get_base_filename(missing_metadata_name)
+
+            # Look for this base name in the actual files
+            for actual_name in missing_from_metadata:
+                actual_base = self.get_base_filename(actual_name)
+
+                if base_name == actual_base:
+                    # Found a match! Update metadata
+                    old_data = self.metadata_manager.metadata[missing_metadata_name]
+                    self.metadata_manager.metadata[actual_name] = old_data
+                    del self.metadata_manager.metadata[missing_metadata_name]
+
+                    print(f"Synced: {missing_metadata_name} -> {actual_name}")
+                    updates_made += 1
+                    break
+
+        # Add any completely new files
+        remaining_new_files = actual_filenames - set(
+            self.metadata_manager.metadata.keys()
+        )
+        for new_file in remaining_new_files:
+            self.metadata_manager.metadata[new_file] = {
+                "keep": None,
+                "rating": None,
+                "tags": [],
+                "last_compared": None,
+                "created_date": datetime.now().isoformat(),
+                "skill": 0,
+                "comparisons": 0,
+            }
+            print(f"Added new file: {new_file}")
+            updates_made += 1
+
+        if updates_made > 0:
+            self.metadata_manager.save_metadata()
+            print(f"Synced {updates_made} file changes")
+            return True
+
+        return False
+
+    def fix_invisible_files(self):
+        """Fix files that became invisible after manual renaming"""
+        if not self.metadata_manager:
+            messagebox.showwarning("No Folder", "Please select a photo folder first")
+            return
+
+        # Count how many files need syncing
+        if self.sync_metadata_with_files():
+            messagebox.showinfo(
+                "Files Synced",
+                "Successfully synced metadata with manually renamed files!",
+            )
+            self.show_summary_page()  # Refresh display
+        else:
+            messagebox.showinfo("No Changes", "All files are already in sync")
+
+    # Alternative: Auto-sync method to call whenever loading images
+    def load_images_with_sync(self):
+        """Load images and auto-sync any filename changes"""
+        # First try the normal load
+        self.load_images_original()
+
+        # Then sync any discrepancies
+        if hasattr(self, "metadata_manager") and self.metadata_manager:
+            self.sync_metadata_with_files()
+            # Reload after sync
+            self.load_images_original()
+
+    def load_images_original(self):
+        """Original load_images method (rename your current one to this)"""
+        extensions = [
+            "*.jpg",
+            "*.jpeg",
+            "*.png",
+            "*.bmp",
+            "*.gif",
+            "*.tiff",
+            "*.mp4",
+            "*.avi",
+            "*.mov",
+            "*.mkv",
+            "*.wmv",
+            "*.flv",
+        ]
+        all_image_files = []
+
+        for ext in extensions:
+            all_image_files.extend(glob.glob(os.path.join(self.photo_folder, ext)))
+            all_image_files.extend(
+                glob.glob(os.path.join(self.photo_folder, ext.upper()))
+            )
+
+        # Filter out images with quantile below 0.10 for comparisons
+        self.image_files = []
+        masked_count = 0
+
+        for file_path in all_image_files:
+            filename = os.path.basename(file_path)
+            if self.metadata_manager and filename in self.metadata_manager.metadata:
+                quantile = self.metadata_manager.get_quantile(filename)
+                if quantile < 10:
+                    masked_count += 1
+                    continue  # Skip this image for comparisons
+
+            self.image_files.append(file_path)
+
+        if len(self.image_files) < 2:
+            print(
+                f"Warning: Only {len(self.image_files)} images available for comparison"
+            )
+            if masked_count > 0:
+                print(f"({masked_count} images masked due to low quantile)")
 
     def run(self):
         self.root.mainloop()
