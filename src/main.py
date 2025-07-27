@@ -183,7 +183,7 @@ class PhotoManager:
             "*.gif",
             "*.tiff",
             "*.mp4",
-            "*.avi",
+            # "*.avi",
             "*.mov",
             "*.mkv",
             "*.wmv",
@@ -228,9 +228,9 @@ class PhotoManager:
             if platform.system() == "Windows":
                 # Try different players in order of preference
                 players = [
+                    r"C:\Program Files\Windows Media Player\wmplayer.exe",
                     r"C:\Program Files\VideoLAN\VLC\vlc.exe",
                     r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
-                    r"C:\Program Files\Windows Media Player\wmplayer.exe",
                 ]
 
                 for player in players:
@@ -285,8 +285,6 @@ class PhotoManager:
             outcome = "tie"
 
         # Update Elo ratings
-        self.metadata_manager.update_skills(left_filename, right_filename, outcome)
-
         self.metadata_manager.update_skills(left_filename, right_filename, outcome)
 
         # Update file tags with new quantiles
@@ -391,7 +389,7 @@ class PhotoManager:
             file_ext = os.path.splitext(path)[1].lower()
 
             # Check if it's a video file
-            video_extensions = [".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv"]
+            video_extensions = [".mp4", ".mov", ".mkv", ".wmv", ".flv"]  # ".avi",
 
             if file_ext in video_extensions:
                 # Extract first frame from video
@@ -556,7 +554,7 @@ class PhotoManager:
             try:
                 img_path = os.path.join(self.photo_folder, filename)
                 file_ext = os.path.splitext(filename)[1].lower()
-                video_extensions = [".mp4", ".avi", ".mov", ".mkv", ".wmv", ".flv"]
+                video_extensions = [".mp4", ".mov", ".mkv", ".wmv", ".flv"]  # ".avi",
 
                 if file_ext in video_extensions:
                     # Extract first frame from video
@@ -1039,7 +1037,7 @@ class PhotoManager:
             "*.gif",
             "*.tiff",
             "*.mp4",
-            "*.avi",
+            # "*.avi",
             "*.mov",
             "*.mkv",
             "*.wmv",
@@ -1143,7 +1141,7 @@ class PhotoManager:
             "*.gif",
             "*.tiff",
             "*.mp4",
-            "*.avi",
+            # "*.avi",
             "*.mov",
             "*.mkv",
             "*.wmv",
