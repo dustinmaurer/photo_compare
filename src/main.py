@@ -25,6 +25,20 @@ class PhotoManager:
         self.root = tk.Tk()
         self.root.title("Photo Manager")
         self.root.geometry("1200x600")
+
+        # Center the window on screen
+        self.root.update_idletasks()  # Ensure window size is calculated
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+
+        window_width = 1200
+        window_height = 600
+
+        x = (screen_width - window_width) // 2
+        y = (screen_height - window_height) // 10
+
+        self.root.geometry(f"{window_width}x{window_height}+{x}+{y}")
+
         self.metadata_manager = None
         self.test_mode = test_mode
 
@@ -389,14 +403,16 @@ class PhotoManager:
             file_ext = os.path.splitext(path)[1].lower()
 
             # Check if it's a video file
-            video_extensions = [".mp4", ".mov", ".mkv", ".wmv", ".flv"]  # ".avi",
+            video_extensions = [".mp4", ".mov", ".mkv", ".wmv", ".flv"]  # removed .avi
 
             if file_ext in video_extensions:
                 # Extract first frame from video
                 img = self.extract_video_frame(path)
+                is_video = True
             else:
                 # Regular image
                 img = Image.open(path)
+                is_video = False
 
             # Resize to fit in half the window
             img.thumbnail((580, 400), Image.Resampling.LANCZOS)
@@ -408,16 +424,25 @@ class PhotoManager:
             quantile = self.metadata_manager.get_quantile(filename)
 
             # Create info text with file type indicator
-            file_type = "VIDEO" if file_ext in video_extensions else "IMAGE"
+            file_type = "VIDEO" if is_video else "IMAGE"
             info_text = f"{filename} ({file_type})\nSkill: {skill:.2f} | Quantile: {quantile:.1f} | Comparisons: {comparisons}"
 
+            # Set border color based on file type
+            border_color = "red" if is_video else "blue"
+
             label.configure(
-                image=photo, text=info_text, compound="top", font=("Arial", 10)
+                image=photo,
+                text=info_text,
+                compound="top",
+                font=("Arial", 10),
+                bg=border_color,  # Background color for border
+                relief="solid",  # Solid border style
+                borderwidth=2,  # Thinner border
             )
             label.image = photo  # Keep reference
 
             # Add click event for videos
-            if file_ext in video_extensions:
+            if is_video:
                 label.configure(cursor="hand2")  # Change cursor to indicate clickable
                 label.bind("<Button-1>", lambda e: self.open_video(path))
             else:
@@ -428,16 +453,16 @@ class PhotoManager:
             label.configure(text=f"Error loading image: {os.path.basename(path)}")
 
     def show_summary_page(self):
-        """Display summary of photos ordered by skill"""
+        """Display summary of photos ordered by skill with colored borders"""
         # Clear existing widgets
         for widget in self.root.winfo_children():
             widget.destroy()
 
         self.load_images()  # Reload image list
 
-        # Calculate window size for 10 photos (2 rows × 5 columns)
+        # Calculate window size for 10 photos (2 rows × 4 columns)
         # Each photo: 280px + padding, plus scrollbar and buttons
-        window_width = (280 + 20) * 5 + 40  # 5 columns * (image + padding) + margins
+        window_width = (280 + 20) * 4 + 60  # 4 columns * (image + padding) + margins
         window_height = (
             280 + 80
         ) * 2 + 200  # 2 rows * (image + text + padding) + buttons/header
@@ -507,13 +532,48 @@ class PhotoManager:
         )
         sync_btn.pack(side="left", padx=10)
 
-        # Header
+        # Header with legend
+        header_frame = tk.Frame(self.root)
+        header_frame.pack(pady=10)
+
         header = tk.Label(
-            self.root,
+            header_frame,
             text="Photo Summary (Ordered by Skill)",
             font=("Arial", 16, "bold"),
         )
-        header.pack(pady=10)
+        header.pack()
+
+        # Legend for border colors
+        legend_frame = tk.Frame(header_frame)
+        legend_frame.pack(pady=5)
+
+        tk.Label(legend_frame, text="Legend:", font=("Arial", 10, "bold")).pack(
+            side="left"
+        )
+
+        # Blue box for images
+        img_legend = tk.Label(
+            legend_frame,
+            text=" IMAGE ",
+            bg="blue",
+            fg="white",
+            font=("Arial", 8, "bold"),
+            relief="solid",
+            borderwidth=2,
+        )
+        img_legend.pack(side="left", padx=5)
+
+        # Red box for videos
+        vid_legend = tk.Label(
+            legend_frame,
+            text=" VIDEO ",
+            bg="red",
+            fg="white",
+            font=("Arial", 8, "bold"),
+            relief="solid",
+            borderwidth=2,
+        )
+        vid_legend.pack(side="left", padx=5)
 
         # Get photos sorted by skill (lowest first)
         photos_data = []
@@ -526,8 +586,8 @@ class PhotoManager:
 
         photos_data.sort(key=lambda x: x[1])  # Sort by skill
 
-        # Show up to 10 photos (2 rows × 5 columns)
-        display_count = min(len(photos_data), 10)
+        # Show up to 20 photos (5 rows × 4 columns)
+        display_count = min(len(photos_data), 20)
         photos_to_show = photos_data[:display_count]
 
         # Create scrollable frame
@@ -541,47 +601,79 @@ class PhotoManager:
         )
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
 
-        # Display photos in grid (2 rows, 5 columns)
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        # Bind mousewheel to canvas and scrollable_frame
+        canvas.bind("<MouseWheel>", on_mousewheel)
+        scrollable_frame.bind("<MouseWheel>", on_mousewheel)
+
+        # Also bind to the root window when mouse is over the summary
+        self.root.bind("<MouseWheel>", on_mousewheel)
+
+        # Display photos in grid (5 rows, 4 columns)
         for i, (filename, skill, quantile, comparisons) in enumerate(photos_to_show):
-            row = i // 5  # New row every 5 items
-            col = i % 5  # Column cycles 0-4
+            row = i // 4  # New row every 4 items
+            col = i % 4  # Column cycles 0-3
 
-            # Photo frame
-            photo_frame = tk.Frame(scrollable_frame, relief="raised", borderwidth=2)
-            photo_frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
-
-            # Load and display image
+            # Load and display image with colored border
             try:
                 img_path = os.path.join(self.photo_folder, filename)
                 file_ext = os.path.splitext(filename)[1].lower()
-                video_extensions = [".mp4", ".mov", ".mkv", ".wmv", ".flv"]  # ".avi",
+                video_extensions = [
+                    ".mp4",
+                    ".mov",
+                    ".mkv",
+                    ".wmv",
+                    ".flv",
+                ]  # removed .avi
 
                 if file_ext in video_extensions:
                     # Extract first frame from video
                     img = self.extract_video_frame(img_path)
+                    is_video = True
                 else:
                     # Regular image
                     img = Image.open(img_path)
+                    is_video = False
 
                 img.thumbnail((280, 280), Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(img)
 
-                img_label = tk.Label(photo_frame, image=photo)
+                # Set border color based on file type
+                border_color = "red" if is_video else "blue"
+
+                # Photo frame with thin colored border
+                photo_frame = tk.Frame(
+                    scrollable_frame,
+                    relief="solid",
+                    borderwidth=2,  # Thinner border
+                    bg=border_color,  # Colored border
+                )
+                photo_frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
+
+                img_label = tk.Label(photo_frame, image=photo, bg=border_color)
                 img_label.image = photo  # Keep reference
-                img_label.pack()
+                img_label.pack(padx=1, pady=1)  # Minimal padding inside border
 
                 # Add click event for videos
-                if file_ext in video_extensions:
+                if is_video:
                     img_label.configure(cursor="hand2")
                     img_label.bind(
                         "<Button-1>", lambda e, path=img_path: self.open_video(path)
                     )
 
                 # Info text with file type indicator
-                file_type = "VIDEO" if file_ext in video_extensions else "IMAGE"
+                file_type = "VIDEO" if is_video else "IMAGE"
                 info_text = f"{filename} ({file_type})\nSkill: {skill:.2f} | Quantile: {quantile:.1f}\nComparisons: {comparisons}"
-                info_label = tk.Label(photo_frame, text=info_text, font=("Arial", 9))
-                info_label.pack(pady=5)
+                info_label = tk.Label(
+                    photo_frame,
+                    text=info_text,
+                    font=("Arial", 9),
+                    bg=border_color,
+                    fg="white",
+                )
+                info_label.pack(pady=2)  # Less padding
 
             except Exception as e:
                 print(f"Error loading {filename} in summary: {e}")
@@ -593,6 +685,9 @@ class PhotoManager:
 
     def start_comparison_mode(self):
         """Switch to comparison mode"""
+        # Unbind mousewheel events before clearing widgets
+        self.root.unbind("<MouseWheel>")
+
         # Clear and rebuild UI
         for widget in self.root.winfo_children():
             widget.destroy()
