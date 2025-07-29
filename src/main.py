@@ -81,7 +81,7 @@ class PhotoManager:
             quantile = self.metadata_manager.get_quantile(filename)
             if quantile >= 10:  # quantile is 0-100
                 available_images.append(file_path)
-                print(f"Quantile for {filename}: {quantile}")
+                # print(f"Quantile for {filename}: {quantile}")
 
         print(f"Available images: {len(available_images)}")  # Debug line
 
@@ -156,27 +156,60 @@ class PhotoManager:
                 cap.release()
 
     def get_weighted_selection_from_list(self, image_list, k=2):
-        """Select images from provided list with weighting based on distance from 0.10 quantile"""
+        """Select images from provided list with weighting based on distance from quantile 20"""
 
         # Remove any duplicate paths first
         unique_images = list(set(image_list))
-        print(f"Original list: {len(image_list)}, Unique: {len(unique_images)}")
+        # print(f"Original list: {len(image_list)}, Unique: {len(unique_images)}")
 
         if len(unique_images) < k:
             print(f"Warning: Only {len(unique_images)} unique images available")
             return unique_images
 
-        # For now, let's just use random selection to eliminate the duplicate issue
-        # We can add weighting back once we confirm duplicates are gone
-        selected = random.sample(unique_images, k)
+        # Calculate weights based on distance from quantile 20
+        weights = []
+        for img_path in unique_images:
+            filename = os.path.basename(img_path)
+            quantile = self.metadata_manager.get_quantile(filename)
+            # Distance from 20th quantile - images closer to 20 get higher weight
+            distance_from_20 = abs(quantile - 20)
+            # Invert the distance so closer images get higher weight
+            # Add 1 to avoid division by zero when quantile is exactly 20
+            weight = 1 / (distance_from_20 + 1)
+            weights.append(weight)
+
+        # Use numpy-style weighted selection without replacement
+        import random
+
+        selected = []
+        available_images = unique_images.copy()
+        available_weights = weights.copy()
+
+        for _ in range(k):
+            if not available_images:
+                break
+
+            # Select one image based on weights
+            chosen = random.choices(available_images, weights=available_weights, k=1)[0]
+            selected.append(chosen)
+
+            # Remove the selected image and its weight from available options
+            chosen_index = available_images.index(chosen)
+            available_images.pop(chosen_index)
+            available_weights.pop(chosen_index)
 
         print(f"Selected: {[os.path.basename(img) for img in selected]}")
+        print(
+            f"Quantiles: {[self.metadata_manager.get_quantile(os.path.basename(img)) for img in selected]}"
+        )
+
         return selected
 
     def handle_keypress(self, event):
         if not hasattr(self, "current_images") or len(self.current_images) != 2:
             return
 
+        # Arrow keys
         if event.keysym == "Left":
             self.process_comparison(1, 0)  # Left wins
         elif event.keysym == "Right":
@@ -185,6 +218,17 @@ class PhotoManager:
             self.process_comparison(1, 1)  # Both win
         elif event.keysym == "Down":
             self.process_comparison(0, 0)  # Both lose
+
+        # WASD keys (same mappings)
+        elif event.keysym.lower() == "a":
+            self.process_comparison(1, 0)  # Left wins (A = left)
+        elif event.keysym.lower() == "d":
+            self.process_comparison(0, 1)  # Right wins (D = right)
+        elif event.keysym.lower() == "w":
+            self.process_comparison(1, 1)  # Both win (W = up)
+        elif event.keysym.lower() == "s":
+            self.process_comparison(0, 0)  # Both lose (S = down)
+
         elif event.keysym == "space":
             self.process_comparison(0.5, 0.5)  # Tie
 
@@ -206,10 +250,15 @@ class PhotoManager:
         all_image_files = []
 
         for ext in extensions:
-            all_image_files.extend(glob.glob(os.path.join(self.photo_folder, ext)))
-            all_image_files.extend(
-                glob.glob(os.path.join(self.photo_folder, ext.upper()))
-            )
+            # Only add lowercase pattern, but make it case-insensitive
+            lowercase_files = glob.glob(os.path.join(self.photo_folder, ext))
+            uppercase_files = glob.glob(os.path.join(self.photo_folder, ext.upper()))
+
+            all_image_files.extend(lowercase_files)
+            all_image_files.extend(uppercase_files)
+
+        # Remove duplicates that might occur from case variations
+        all_image_files = list(set(all_image_files))
 
         # Filter out images with quantile below 0.10 for comparisons
         self.image_files = []
