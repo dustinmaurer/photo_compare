@@ -74,12 +74,12 @@ class PhotoManager:
             self.img2_label.image = None
 
     def display_random_pair(self):
-        # Filter out images below 0.10 quantile before each comparison
+        # Filter out images below 0.05 quantile before each comparison
         available_images = []
         for file_path in self.image_files:
             filename = os.path.basename(file_path)
             quantile = self.metadata_manager.get_quantile(filename)
-            if quantile >= 10:  # quantile is 0-100
+            if quantile >= 5:  # quantile is 0-100
                 available_images.append(file_path)
                 # print(f"Quantile for {filename}: {quantile}")
 
@@ -112,9 +112,29 @@ class PhotoManager:
             print(f"DUPLICATE DETECTED: {self.current_images}")
             return
 
-        # Load and display images
-        self.show_image(self.current_images[0], self.img1_label)
-        self.show_image(self.current_images[1], self.img2_label)
+        # Load and display images with better error handling
+        try:
+            self.show_image(self.current_images[0], self.img1_label)
+        except Exception as e:
+            print(f"Error loading left image {self.current_images[0]}: {e}")
+            self.show_error_image(self.img1_label, self.current_images[0], str(e))
+
+        try:
+            self.show_image(self.current_images[1], self.img2_label)
+        except Exception as e:
+            print(f"Error loading right image {self.current_images[1]}: {e}")
+            self.show_error_image(self.img2_label, self.current_images[1], str(e))
+
+    def clear_image_references(self):
+        """Clear all image references to free memory and prevent display issues"""
+        if hasattr(self, "img1_label"):
+            self.img1_label.configure(image="", text="")
+            self.img1_label.image = None
+            self.img1_label.unbind("<Button-1>")  # Remove any click events
+        if hasattr(self, "img2_label"):
+            self.img2_label.configure(image="", text="")
+            self.img2_label.image = None
+            self.img2_label.unbind("<Button-1>")  # Remove any click events
 
     def extract_video_frame(self, video_path):
         """Extract first frame from video file"""
@@ -155,6 +175,13 @@ class PhotoManager:
             if cap is not None:
                 cap.release()
 
+    def get_base_filename(self, filename):
+        """Get the base filename without quantile prefix"""
+        if filename.startswith("Q") and "_" in filename[:5]:
+            underscore_pos = filename.find("_")
+            return filename[underscore_pos + 1 :]
+        return filename
+
     def get_weighted_selection_from_list(self, image_list, k=2):
         """Select images from provided list with weighting based on distance from quantile 20"""
 
@@ -171,11 +198,11 @@ class PhotoManager:
         for img_path in unique_images:
             filename = os.path.basename(img_path)
             quantile = self.metadata_manager.get_quantile(filename)
-            # Distance from 20th quantile - images closer to 20 get higher weight
-            distance_from_20 = abs(quantile - 20)
+            # Distance from 30th quantile - images closer to 20 get higher weight
+            distance_from_30 = abs(quantile - 30)
             # Invert the distance so closer images get higher weight
-            # Add 1 to avoid division by zero when quantile is exactly 20
-            weight = 1 / (distance_from_20 + 1)
+            # Add 1 to avoid division by zero when quantile is exactly 30
+            weight = 1 / (distance_from_30 + 1)
             weights.append(weight)
 
         # Use numpy-style weighted selection without replacement
@@ -446,13 +473,71 @@ class PhotoManager:
         self.root.bind("<Key>", self.handle_keypress)
         self.root.focus_set()  # Ensure window can receive key events
 
+    def show_error_image(self, label, path, error_msg):
+        """Display an error placeholder when image loading fails"""
+        try:
+            # Create a simple error image
+            from PIL import Image, ImageDraw, ImageFont
+
+            error_img = Image.new("RGB", (400, 300), color="red")
+            draw = ImageDraw.Draw(error_img)
+
+            # Add error text
+            filename = os.path.basename(path)
+            error_text = f"ERROR\n{filename}\n{error_msg[:50]}..."
+
+            # Try to use a font, fall back to default if not available
+            try:
+                font = ImageFont.truetype("arial.ttf", 16)
+            except:
+                font = ImageFont.load_default()
+
+            # Get text size and center it
+            bbox = draw.textbbox((0, 0), error_text, font=font)
+            text_width = bbox[2] - bbox[0]
+            text_height = bbox[3] - bbox[1]
+            x = (400 - text_width) // 2
+            y = (300 - text_height) // 2
+
+            draw.text((x, y), error_text, fill="white", font=font, align="center")
+
+            photo = ImageTk.PhotoImage(error_img)
+            label.configure(
+                image=photo,
+                text=f"Error loading: {filename}",
+                compound="top",
+                font=("Arial", 10),
+                bg="red",
+                relief="solid",
+                borderwidth=2,
+            )
+            label.image = photo  # Keep reference
+            label.configure(cursor="")
+            label.unbind("<Button-1>")
+
+        except Exception as fallback_error:
+            # Ultimate fallback - just show text
+            print(f"Error creating error image: {fallback_error}")
+            label.configure(
+                image="",
+                text=f"ERROR: Could not load\n{os.path.basename(path)}\n{error_msg}",
+                compound="top",
+                font=("Arial", 10),
+                bg="red",
+                fg="white",
+                relief="solid",
+                borderwidth=2,
+            )
+            label.image = None
+
     def show_image(self, path, label):
+        """Show image with improved error handling and cleanup"""
         try:
             filename = os.path.basename(path)
             file_ext = os.path.splitext(path)[1].lower()
 
             # Check if it's a video file
-            video_extensions = [".mp4", ".mov", ".mkv", ".wmv", ".flv"]  # removed .avi
+            video_extensions = [".mp4", ".mov", ".mkv", ".wmv", ".flv"]
 
             if file_ext in video_extensions:
                 # Extract first frame from video
@@ -467,10 +552,15 @@ class PhotoManager:
             img.thumbnail((580, 400), Image.Resampling.LANCZOS)
             photo = ImageTk.PhotoImage(img)
 
-            # Get metadata
-            skill = self.metadata_manager.metadata[filename]["skill"]
-            comparisons = self.metadata_manager.metadata[filename]["comparisons"]
-            quantile = self.metadata_manager.get_quantile(filename)
+            # Get metadata safely
+            if filename in self.metadata_manager.metadata:
+                skill = self.metadata_manager.metadata[filename]["skill"]
+                comparisons = self.metadata_manager.metadata[filename]["comparisons"]
+                quantile = self.metadata_manager.get_quantile(filename)
+            else:
+                skill = 0
+                comparisons = 0
+                quantile = 50
 
             # Create info text with file type indicator
             file_type = "VIDEO" if is_video else "IMAGE"
@@ -484,22 +574,24 @@ class PhotoManager:
                 text=info_text,
                 compound="top",
                 font=("Arial", 10),
-                bg=border_color,  # Background color for border
-                relief="solid",  # Solid border style
-                borderwidth=2,  # Thinner border
+                bg=border_color,
+                relief="solid",
+                borderwidth=2,
             )
             label.image = photo  # Keep reference
 
             # Add click event for videos
             if is_video:
-                label.configure(cursor="hand2")  # Change cursor to indicate clickable
+                label.configure(cursor="hand2")
                 label.bind("<Button-1>", lambda e: self.open_video(path))
             else:
-                label.unbind("<Button-1>")  # Remove click event for images
+                label.unbind("<Button-1>")
                 label.configure(cursor="")
 
         except Exception as e:
-            label.configure(text=f"Error loading image: {os.path.basename(path)}")
+            print(f"Exception in show_image for {path}: {e}")
+            # Don't let the exception propagate - show error image instead
+            self.show_error_image(label, path, str(e))
 
     def show_summary_page(self):
         """Display summary of photos ordered by skill with colored borders"""
@@ -575,22 +667,68 @@ class PhotoManager:
         sync_btn = tk.Button(
             button_frame,
             text="Sync Files",
-            command=self.fix_invisible_files,
+            command=self.sync_files,  # Fixed function name
             font=("Arial", 12),
             bg="lightcyan",
         )
         sync_btn.pack(side="left", padx=10)
 
-        # Header with legend
+        # Header with folder info and legend
         header_frame = tk.Frame(self.root)
         header_frame.pack(pady=10)
 
+        # Main title
         header = tk.Label(
             header_frame,
             text="Photo Summary (Ordered by Skill)",
             font=("Arial", 16, "bold"),
         )
         header.pack()
+
+        # Folder path display
+        if self.photo_folder:
+            # Get just the folder name (last part of path) for cleaner display
+            folder_name = os.path.basename(self.photo_folder)
+            # Also show the full path in smaller text
+            folder_info = tk.Label(
+                header_frame,
+                text=f"Folder: {folder_name}",
+                font=("Arial", 14, "bold"),
+                fg="darkblue",
+            )
+            folder_info.pack(pady=2)
+
+            # Full path in smaller text
+            full_path = tk.Label(
+                header_frame,
+                text=f"Path: {self.photo_folder}",
+                font=("Arial", 9),
+                fg="gray",
+            )
+            full_path.pack(pady=1)
+
+            # Photo count
+            total_photos = (
+                len(self.metadata_manager.metadata) if self.metadata_manager else 0
+            )
+            available_photos = (
+                len(self.image_files) if hasattr(self, "image_files") else 0
+            )
+            count_info = tk.Label(
+                header_frame,
+                text=f"Photos: {available_photos} available / {total_photos} total",
+                font=("Arial", 10),
+                fg="darkgreen",
+            )
+            count_info.pack(pady=2)
+        else:
+            no_folder = tk.Label(
+                header_frame,
+                text="No folder selected",
+                font=("Arial", 12),
+                fg="red",
+            )
+            no_folder.pack(pady=2)
 
         # Legend for border colors
         legend_frame = tk.Frame(header_frame)
@@ -1247,21 +1385,134 @@ class PhotoManager:
 
         return False
 
-    def fix_invisible_files(self):
-        """Fix files that became invisible after manual renaming"""
+    def sync_files(self):
+        """Synchronize metadata file with actual files present in folder"""
         if not self.metadata_manager:
             messagebox.showwarning("No Folder", "Please select a photo folder first")
             return
 
-        # Count how many files need syncing
-        if self.sync_metadata_with_files():
-            messagebox.showinfo(
-                "Files Synced",
-                "Successfully synced metadata with manually renamed files!",
-            )
+        # Get all actual files in the directory
+        extensions = [
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".bmp",
+            ".gif",
+            ".tiff",
+            ".mp4",
+            ".mov",
+            ".mkv",
+            ".wmv",
+            ".flv",
+        ]
+
+        actual_files = []
+        # Get all files in directory and filter by extension
+        for file_path in glob.glob(os.path.join(self.photo_folder, "*")):
+            if os.path.isfile(file_path):
+                file_ext = os.path.splitext(file_path)[1].lower()
+                if file_ext in extensions:
+                    actual_files.append(file_path)
+
+        actual_filenames = {os.path.basename(f) for f in actual_files}
+        metadata_filenames = set(self.metadata_manager.metadata.keys())
+
+        print(f"Actual files found: {len(actual_filenames)}")
+        print(f"Metadata entries: {len(metadata_filenames)}")
+
+        # Files that exist but aren't in metadata (need to be added)
+        missing_from_metadata = actual_filenames - metadata_filenames
+
+        # Files in metadata but don't exist (need to be removed)
+        missing_files = metadata_filenames - actual_filenames
+
+        changes_made = 0
+
+        # Remove metadata entries for files that no longer exist
+        if missing_files:
+            print(f"Removing {len(missing_files)} missing files from metadata:")
+            for filename in missing_files:
+                print(f"  - Removing: {filename}")
+                del self.metadata_manager.metadata[filename]
+                changes_made += 1
+
+        # Add metadata entries for new files found
+        if missing_from_metadata:
+            print(f"Adding {len(missing_from_metadata)} new files to metadata:")
+            for filename in missing_from_metadata:
+                print(f"  - Adding: {filename}")
+                self.metadata_manager.metadata[filename] = {
+                    "keep": None,
+                    "rating": None,
+                    "tags": [],
+                    "last_compared": None,
+                    "created_date": datetime.now().isoformat(),
+                    "skill": 0,
+                    "comparisons": 0,
+                }
+                changes_made += 1
+
+        # Try to match renamed files (files with same base name but different quantile prefix)
+        if missing_files and missing_from_metadata:
+            matched_renames = 0
+            remaining_missing = list(missing_files)
+            remaining_new = list(missing_from_metadata)
+
+            for missing_metadata_name in remaining_missing.copy():
+                # Get the base name without quantile prefix
+                base_name = self.get_base_filename(missing_metadata_name)
+
+                # Look for this base name in the actual files
+                for actual_name in remaining_new.copy():
+                    actual_base = self.get_base_filename(actual_name)
+
+                    if base_name == actual_base:
+                        # Found a match! Transfer metadata from old name to new name
+                        print(
+                            f"  - Matched rename: {missing_metadata_name} -> {actual_name}"
+                        )
+
+                        # Copy metadata from old name to new name
+                        old_data = self.metadata_manager.metadata[missing_metadata_name]
+                        self.metadata_manager.metadata[actual_name] = old_data
+
+                        # Remove the old entry (it was already deleted above, but just to be safe)
+                        if missing_metadata_name in self.metadata_manager.metadata:
+                            del self.metadata_manager.metadata[missing_metadata_name]
+
+                        remaining_missing.remove(missing_metadata_name)
+                        remaining_new.remove(actual_name)
+                        matched_renames += 1
+                        break
+
+            if matched_renames > 0:
+                print(f"Matched {matched_renames} renamed files")
+
+        # Save changes if any were made
+        if changes_made > 0:
+            self.metadata_manager.save_metadata()
+
+            # Reload the image list to reflect changes
+            self.load_images()
+
+            # Show detailed results
+            result_msg = f"Synchronization complete!\n\n"
+            if missing_files:
+                result_msg += (
+                    f"• Removed {len(missing_files)} missing files from metadata\n"
+                )
+            if missing_from_metadata:
+                result_msg += (
+                    f"• Added {len(missing_from_metadata)} new files to metadata\n"
+                )
+            result_msg += f"\nTotal changes: {changes_made}"
+
+            messagebox.showinfo("Files Synchronized", result_msg)
             self.show_summary_page()  # Refresh display
         else:
-            messagebox.showinfo("No Changes", "All files are already in sync")
+            messagebox.showinfo(
+                "No Changes", "Metadata is already synchronized with folder contents"
+            )
 
     # Alternative: Auto-sync method to call whenever loading images
     def load_images_with_sync(self):
