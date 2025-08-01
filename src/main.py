@@ -2,7 +2,9 @@ import gc
 import glob
 import math
 import os
+import platform
 import random
+import subprocess
 import tkinter as tk
 import tkinter.ttk as ttk
 from datetime import datetime
@@ -480,10 +482,12 @@ class PhotoManager:
             self.img1_label.configure(image="", text="")
             self.img1_label.image = None
             self.img1_label.unbind("<Button-1>")  # Remove any click events
+            self.img1_label.configure(cursor="")  # Reset cursor
         if hasattr(self, "img2_label"):
             self.img2_label.configure(image="", text="")
             self.img2_label.image = None
             self.img2_label.unbind("<Button-1>")  # Remove any click events
+            self.img2_label.configure(cursor="")  # Reset cursor
 
     def extract_video_frame(self, video_path):
         """Extract first frame from video file"""
@@ -766,30 +770,59 @@ class PhotoManager:
 
     def open_video(self, video_path):
         """Open video file with preferred video player"""
-        import os
-        import platform
-        import subprocess
+
+        # Debug output
+        print(f"Attempting to open video: {video_path}")
+        print(f"File exists: {os.path.exists(video_path)}")
 
         try:
+            # Ensure we have an absolute path
+            if not os.path.isabs(video_path):
+                video_path = os.path.abspath(video_path)
+                print(f"Converted to absolute path: {video_path}")
+
+            if not os.path.exists(video_path):
+                print(f"Error: Video file does not exist: {video_path}")
+                from tkinter import messagebox
+
+                messagebox.showerror(
+                    "File Not Found", f"Video file not found:\n{video_path}"
+                )
+                return
+
             if platform.system() == "Windows":
                 # Try different players in order of preference
                 players = [
-                    r"C:\Program Files\Windows Media Player\wmplayer.exe",
-                    r"C:\Program Files\VideoLAN\VLC\vlc.exe",
-                    r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
+                    # VLC with autoplay flag
+                    (r"C:\Program Files\VideoLAN\VLC\vlc.exe", ["--play-and-exit"]),
+                    (
+                        r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
+                        ["--play-and-exit"],
+                    ),
+                    # Windows Media Player
+                    (r"C:\Program Files\Windows Media Player\wmplayer.exe", []),
                 ]
 
-                for player in players:
-                    if os.path.exists(player):
-                        subprocess.Popen([player, video_path])
-                        # print(
-                        #     # f"Opening video with {os.path.basename(player)}: {os.path.basename(video_path)}"
-                        # )
+                for player_info in players:
+                    if len(player_info) == 2:
+                        player_path, args = player_info
+                    else:
+                        player_path, args = player_info[0], []
+
+                    if os.path.exists(player_path):
+                        # Build command with arguments
+                        cmd = [player_path] + args + [video_path]
+                        print(f"Executing command: {cmd}")  # Debug
+                        subprocess.Popen(cmd)
+                        print(
+                            f"Opening video with {os.path.basename(player_path)}: {os.path.basename(video_path)}"
+                        )
                         return
 
                 # Fallback to default association
+                print("No specific player found, using default association")
                 os.startfile(video_path)
-                # print(f"Opening video with default app: {os.path.basename(video_path)}")
+                print(f"Opening video with default app: {os.path.basename(video_path)}")
 
             elif platform.system() == "Darwin":  # macOS
                 subprocess.Popen(["open", video_path])
@@ -797,7 +830,7 @@ class PhotoManager:
                 subprocess.Popen(["xdg-open", video_path])
 
         except Exception as e:
-            # print(f"Error opening video {video_path}: {e}")
+            print(f"Error opening video {video_path}: {e}")
             from tkinter import messagebox
 
             messagebox.showerror("Error", f"Could not open video: {e}")
@@ -1048,12 +1081,25 @@ class PhotoManager:
             )
             label.image = photo  # Keep reference
 
-            # Add click event for videos
+            # Clear any existing click bindings first
+            label.unbind("<Button-1>")
+
+            # Add click event for videos with absolute path
             if is_video:
                 label.configure(cursor="hand2")
-                label.bind("<Button-1>", lambda e: self.open_video(path))
+                # Use absolute path and ensure it exists
+                abs_path = os.path.abspath(path)
+                if os.path.exists(abs_path):
+                    # Create a closure that captures the absolute path
+                    def video_click_handler(event, video_path=abs_path):
+                        print(f"Video clicked: {video_path}")  # Debug
+                        self.open_video(video_path)
+
+                    label.bind("<Button-1>", video_click_handler)
+                    print(f"Bound video click handler for: {abs_path}")  # Debug
+                else:
+                    print(f"Warning: Video file not found: {abs_path}")
             else:
-                label.unbind("<Button-1>")
                 label.configure(cursor="")
 
         except Exception as e:
@@ -1283,6 +1329,12 @@ class PhotoManager:
             try:
                 # Convert relative path to full path
                 img_path = os.path.join(self.photo_folder, relative_path)
+
+                # Ensure the path exists
+                if not os.path.exists(img_path):
+                    print(f"File not found in summary: {img_path}")
+                    continue
+
                 file_ext = os.path.splitext(relative_path)[1].lower()
                 video_extensions = [
                     ".mp4",
@@ -1320,12 +1372,24 @@ class PhotoManager:
                 img_label.image = photo  # Keep reference
                 img_label.pack(padx=1, pady=1)
 
-                # Add click event for videos
+                # Add click event for videos with proper path handling
                 if is_video:
                     img_label.configure(cursor="hand2")
-                    img_label.bind(
-                        "<Button-1>", lambda e, path=img_path: self.open_video(path)
-                    )
+                    # Use absolute path to ensure reliability
+                    abs_path = os.path.abspath(img_path)
+                    if os.path.exists(abs_path):
+                        # Create closure that captures the absolute path
+                        def create_video_handler(video_path):
+                            def handler(event):
+                                print(f"Summary video clicked: {video_path}")  # Debug
+                                self.open_video(video_path)
+
+                            return handler
+
+                        img_label.bind("<Button-1>", create_video_handler(abs_path))
+                        print(f"Bound summary video handler for: {abs_path}")  # Debug
+                    else:
+                        print(f"Warning: Video file not found for summary: {abs_path}")
 
                 # Info text with file type indicator and folder context
                 file_type = "VIDEO" if is_video else "IMAGE"
