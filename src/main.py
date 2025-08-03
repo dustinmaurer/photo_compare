@@ -1119,7 +1119,7 @@ class PhotoManager:
 
         # Calculate window size for 10 photos (2 rows × 4 columns)
         # Each photo: 280px + padding, plus scrollbar and buttons
-        window_width = (280 + 20) * 4 + 60  # 4 columns * (image + padding) + margins
+        window_width = (280 + 20) * 4 + 80  # 4 columns * (image + padding) + margins
         window_height = (
             280 + 80
         ) * 2 + 200  # 2 rows * (image + text + padding) + buttons/header
