@@ -3,8 +3,6 @@ Configuration file for Photo Manager
 Modify these values to customize behavior without touching main code
 """
 
-# test_push
-
 # File traversal settings
 MAX_FOLDER_DEPTH = 4  # Maximum depth for recursive folder traversal
 SKIP_FOLDERS = {"delete", "keep"}  # Folders to skip during traversal
