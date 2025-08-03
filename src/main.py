@@ -19,6 +19,7 @@ from mutagen import File
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 from win32com.shell import shellcon
 
+import config
 from metadata_manager import MetadataManager
 
 
@@ -271,9 +272,9 @@ class PhotoManager:
         self.show_summary_page()
 
     def auto_load_test_folder(self):
-        test_folder = (
-            r"C:\Users\Admin\Desktop\Photos and Videos\test"  # Update this path
-        )
+
+        # Use config value instead of hardcoded path
+        test_folder = config.TEST_FOLDER_PATH  # Instead of hardcoded path
 
         if os.path.exists(test_folder):
             self.photo_folder = test_folder
@@ -378,7 +379,7 @@ class PhotoManager:
         for root, dirs, files in os.walk(self.photo_folder):
             current_depth = root[len(self.photo_folder) :].count(os.sep)
 
-            if current_depth >= 2:
+            if current_depth >= config.MAX_FOLDER_DEPTH:
                 dirs[:] = []
                 continue
 
@@ -660,8 +661,8 @@ class PhotoManager:
             # Calculate current depth
             current_depth = root[len(self.photo_folder) :].count(os.sep)
 
-            # Skip if we're too deep (allow 2 levels: subfolder and sub-subfolder)
-            if current_depth >= 2:
+            # Skip if we're too deep (allow 4 levels: year/month/type/files)
+            if current_depth >= config.MAX_FOLDER_DEPTH:
                 dirs[:] = []  # Don't descend further
                 continue
 
@@ -1791,8 +1792,8 @@ class PhotoManager:
             # Calculate current depth
             current_depth = root[len(self.photo_folder) :].count(os.sep)
 
-            # Skip if we're too deep (allow 2 levels: subfolder and sub-subfolder)
-            if current_depth >= 2:
+            # Skip if we're too deep (allow 4 levels: year/month/type/files)
+            if current_depth >= config.MAX_FOLDER_DEPTH:
                 dirs[:] = []  # Don't descend further
                 continue
 

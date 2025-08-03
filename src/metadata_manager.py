@@ -4,6 +4,8 @@ import math
 import os
 from datetime import datetime
 
+import config
+
 
 class MetadataManager:
     def __init__(self, photo_folder):
@@ -35,8 +37,7 @@ class MetadataManager:
             # Calculate current depth
             current_depth = root[len(self.photo_folder) :].count(os.sep)
 
-            # Skip if we're too deep (allow 2 levels: subfolder and sub-subfolder)
-            if current_depth >= 2:
+            if current_depth >= config.MAX_FOLDER_DEPTH:
                 dirs[:] = []  # Don't descend further
                 continue
 
@@ -105,8 +106,8 @@ class MetadataManager:
             # Calculate current depth
             current_depth = root[len(self.photo_folder) :].count(os.sep)
 
-            # Skip if we're too deep (allow 2 levels: subfolder and sub-subfolder)
-            if current_depth >= 2:
+            # Skip if we're too deep (allow 4 levels for year/month/type structure)
+            if current_depth >= config.MAX_FOLDER_DEPTH:
                 dirs[:] = []  # Don't descend further
                 continue
 
@@ -167,8 +168,7 @@ class MetadataManager:
             # Calculate current depth
             current_depth = root[len(self.photo_folder) :].count(os.sep)
 
-            # Skip if we're too deep (allow 2 levels: subfolder and sub-subfolder)
-            if current_depth >= 2:
+            if current_depth >= config.MAX_FOLDER_DEPTH:
                 dirs[:] = []  # Don't descend further
                 continue
 
@@ -271,8 +271,8 @@ class MetadataManager:
         for root, dirs, files in os.walk(self.photo_folder):
             current_depth = root[len(self.photo_folder) :].count(os.sep)
 
-            if current_depth >= 2:
-                dirs[:] = []
+            # Skip if we're too deep (allow 4 levels for year/month/type structure)
+            if current_depth >= config.MAX_FOLDER_DEPTH:
                 continue
 
             dirs[:] = [d for d in dirs if d.lower() not in skip_folders]
