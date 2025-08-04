@@ -27,15 +27,21 @@ class PhotoManager:
     def __init__(self, test_mode=False):
         self.root = tk.Tk()
         self.root.title("Photo Manager")
-        self.root.geometry("1200x600")
 
-        # Center the window on screen
+        # Use config values for window size
+        self.root.geometry(f"{config.WINDOW_WIDTH}x{config.WINDOW_HEIGHT}")
+
+        if not config.ALLOW_WINDOW_RESIZE:
+            self.root.resizable(False, False)
+
+        # Center the window on screen using CONFIG values (not hardcoded)
         self.root.update_idletasks()  # Ensure window size is calculated
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
 
-        window_width = 1200
-        window_height = 600
+        # Use the CONFIG values for centering calculation
+        window_width = config.WINDOW_WIDTH  # Instead of hardcoded 1200
+        window_height = config.WINDOW_HEIGHT  # Instead of hardcoded 600
 
         x = (screen_width - window_width) // 2
         y = (screen_height - window_height) // 10
@@ -47,6 +53,9 @@ class PhotoManager:
 
         self.photo_folder = None
         self.image_files = []
+
+        # Initialize the toggle state EARLY - this was missing/in wrong place
+        self.show_worst = config.DEFAULT_SHOW_WORST  # Use config value
 
         self.setup_ui()
 
@@ -490,6 +499,181 @@ class PhotoManager:
             self.img2_label.unbind("<Button-1>")  # Remove any click events
             self.img2_label.configure(cursor="")  # Reset cursor
 
+    def create_photo_display(self):
+        """Create the photo display area (extracted from show_summary_page)"""
+        # Get photos sorted by skill
+        photos_data = []
+        for relative_path, data in self.metadata_manager.metadata.items():
+            # Convert relative path to full path for file existence check
+            full_path = os.path.join(self.photo_folder, relative_path)
+
+            if os.path.exists(full_path):
+                quantile = self.metadata_manager.get_quantile(relative_path)
+                photos_data.append(
+                    (relative_path, data["skill"], quantile, data["comparisons"])
+                )
+            else:
+                print(f"File not found: {full_path}")
+
+        # Sort based on toggle state
+        if self.show_worst:
+            photos_data.sort(key=lambda x: x[1])  # Sort by skill (lowest first) - WORST
+            display_title = "Worst Photos (Lowest Skill)"
+            title_color = "red"
+        else:
+            photos_data.sort(
+                key=lambda x: x[1], reverse=True
+            )  # Sort by skill (highest first) - BEST
+            display_title = "Best Photos (Highest Skill)"
+            title_color = "green"
+
+        # Show up to 20 photos (5 rows × 4 columns)
+        display_count = min(len(photos_data), 20)
+        photos_to_show = photos_data[:display_count]
+
+        # Update header to reflect current view
+        for widget in self.root.winfo_children():
+            if isinstance(widget, tk.Frame):
+                for child in widget.winfo_children():
+                    if isinstance(child, tk.Label) and "Photo Summary" in child.cget(
+                        "text"
+                    ):
+                        child.config(text=display_title, fg=title_color)
+                        break
+
+        # Create scrollable frame for photos
+        canvas = tk.Canvas(self.root)
+        scrollbar = tk.Scrollbar(self.root, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas)
+
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.bind(
+            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        # Bind mousewheel events
+        canvas.bind("<MouseWheel>", on_mousewheel)
+        scrollable_frame.bind("<MouseWheel>", on_mousewheel)
+        self.root.bind("<MouseWheel>", on_mousewheel)
+
+        # Display photos in grid (5 rows, 4 columns)
+        for i, (relative_path, skill, quantile, comparisons) in enumerate(
+            photos_to_show
+        ):
+            row = i // 4  # New row every 4 items
+            col = i % 4  # Column cycles 0-3
+
+            # Load and display image with colored border
+            try:
+                # Convert relative path to full path
+                img_path = os.path.join(self.photo_folder, relative_path)
+                file_ext = os.path.splitext(relative_path)[1].lower()
+                video_extensions = [
+                    ".mp4",
+                    ".mov",
+                    ".mkv",
+                    ".wmv",
+                    ".flv",
+                ]
+
+                if file_ext in video_extensions:
+                    # Extract first frame from video
+                    img = self.extract_video_frame(img_path)
+                    is_video = True
+                else:
+                    # Regular image
+                    img = Image.open(img_path)
+                    is_video = False
+
+                img.thumbnail((280, 280), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+
+                # Set border color based on file type
+                border_color = "red" if is_video else "blue"
+
+                # Photo frame with thin colored border
+                photo_frame = tk.Frame(
+                    scrollable_frame,
+                    relief="solid",
+                    borderwidth=2,
+                    bg=border_color,
+                )
+                photo_frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
+
+                img_label = tk.Label(photo_frame, image=photo, bg=border_color)
+                img_label.image = photo  # Keep reference
+                img_label.pack(padx=1, pady=1)
+
+                # Add click event for videos
+                if is_video:
+                    img_label.configure(cursor="hand2")
+                    abs_path = os.path.abspath(img_path)
+                    if os.path.exists(abs_path):
+
+                        def create_video_handler(video_path):
+                            def handler(event):
+                                print(f"Summary video clicked: {video_path}")
+                                self.open_video(video_path)
+
+                            return handler
+
+                        img_label.bind("<Button-1>", create_video_handler(abs_path))
+
+                # Info text with ranking indicator
+                file_type = "VIDEO" if is_video else "IMAGE"
+                display_name = relative_path.replace("/", " / ")
+
+                # Add ranking info
+                rank = i + 1
+                total_shown = len(photos_to_show)
+                rank_text = f"#{rank} of {total_shown} shown"
+
+                info_text = f"{display_name} ({file_type})\n{rank_text}\nSkill: {skill:.2f} | Quantile: {quantile:.1f}\nComparisons: {comparisons}"
+                info_label = tk.Label(
+                    photo_frame,
+                    text=info_text,
+                    font=("Arial", 8),  # Slightly smaller to fit ranking
+                    bg=border_color,
+                    fg="white",
+                )
+                info_label.pack(pady=2)
+
+            except Exception as e:
+                print(f"Error loading {relative_path} in summary: {e}")
+                # Create error frame
+                photo_frame = tk.Frame(
+                    scrollable_frame,
+                    relief="solid",
+                    borderwidth=2,
+                    bg="red",
+                )
+                photo_frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
+
+                error_label = tk.Label(
+                    photo_frame, text=f"Error: {relative_path}", bg="red", fg="white"
+                )
+                error_label.pack()
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+    def enhanced_handle_keypress_with_toggle(self, event):
+        """Enhanced keypress handler that includes toggle functionality"""
+
+        # Global toggle shortcut (works in any mode)
+        if event.keysym.lower() == "t" and event.state & 0x4:  # Ctrl+T
+            if hasattr(self, "show_worst"):  # Only if we're in summary mode
+                self.toggle_best_worst()
+                return
+
+        # Continue with existing keypress handling for comparison mode
+        if not hasattr(self, "current_images") or len(self.current_images) != 2:
+            return
+
     def extract_video_frame(self, video_path):
         """Extract first frame from video file"""
         try:
@@ -881,6 +1065,21 @@ class PhotoManager:
         if self.comparison_count % 10 == 0:
             gc.collect()
 
+    def refresh_summary_display(self):
+        """Refresh just the photo display part without rebuilding entire UI"""
+        # Find and clear the existing photo display area
+        for widget in self.root.winfo_children():
+            if isinstance(widget, tk.Canvas):  # Find the canvas with photos
+                widget.destroy()
+            elif hasattr(widget, "winfo_children"):
+                # Look for scrollable frame
+                for child in widget.winfo_children():
+                    if isinstance(child, tk.Canvas):
+                        child.destroy()
+
+        # Rebuild just the photo display part
+        self.create_photo_display()
+
     def reset_all_scores(self):
         """Reset all photo skills and comparison counts"""
         if not self.metadata_manager:
@@ -1109,22 +1308,20 @@ class PhotoManager:
             self.show_error_image(label, path, str(e))
 
     def show_summary_page(self):
-        """Display summary of photos ordered by skill with colored borders"""
+        """Enhanced summary page with best/worst toggle"""
         # Clear existing widgets
         for widget in self.root.winfo_children():
             widget.destroy()
 
-        self.load_images()  # Reload image list
-        self.sync_files(silent=True)  # Sync metadata with files (no popup)
+        self.load_images()
+        self.sync_files(silent=True)
 
-        # Calculate window size for 10 photos (2 rows × 4 columns)
-        # Each photo: 280px + padding, plus scrollbar and buttons
-        window_width = (280 + 20) * 4 + 80  # 4 columns * (image + padding) + margins
-        window_height = (
-            280 + 80
-        ) * 2 + 200  # 2 rows * (image + text + padding) + buttons/header
-
-        self.root.geometry(f"{window_width}x{window_height}")
+        # Only resize if config allows it AND user hasn't manually resized
+        if not config.REMEMBER_WINDOW_SIZE:
+            # Calculate appropriate size for summary content
+            window_width = (280 + 20) * 4 + 60
+            window_height = (280 + 80) * 2 + 200
+            self.root.geometry(f"{window_width}x{window_height}")
 
         # Button frame
         button_frame = tk.Frame(self.root)
@@ -1148,6 +1345,19 @@ class PhotoManager:
             bg="lightblue",
         )
         compare_btn.pack(side="left", padx=10)
+
+        # NEW: Best/Worst Toggle Button
+        toggle_text = "Show BEST Photos" if self.show_worst else "Show WORST Photos"
+        toggle_color = "lightgreen" if self.show_worst else "lightcoral"
+
+        toggle_btn = tk.Button(
+            button_frame,
+            text=toggle_text,
+            command=self.toggle_best_worst,
+            font=("Arial", 12, "bold"),
+            bg=toggle_color,
+        )
+        toggle_btn.pack(side="left", padx=10)
 
         # Button to reset all scores
         reset_btn = tk.Button(
@@ -1183,21 +1393,26 @@ class PhotoManager:
         sync_btn = tk.Button(
             button_frame,
             text="Sync Files",
-            command=self.sync_files,  # Fixed function name
+            command=self.sync_files,
             font=("Arial", 12),
             bg="lightcyan",
         )
         sync_btn.pack(side="left", padx=10)
 
-        # Header with folder info and legend
+        # Header with folder info and current view indicator
         header_frame = tk.Frame(self.root)
         header_frame.pack(pady=10)
 
-        # Main title
+        # Dynamic title based on current view
+        current_view = (
+            "Worst Photos (Lowest Skill)"
+            if self.show_worst
+            else "Best Photos (Highest Skill)"
+        )
+        title_color = "red" if self.show_worst else "green"
+
         header = tk.Label(
-            header_frame,
-            text="Photo Summary (Ordered by Skill)",
-            font=("Arial", 16, "bold"),
+            header_frame, text=current_view, font=("Arial", 16, "bold"), fg=title_color
         )
         header.pack()
 
@@ -1278,154 +1493,147 @@ class PhotoManager:
         )
         vid_legend.pack(side="left", padx=5)
 
-        # Get photos sorted by skill (lowest first)
-        photos_data = []
-        for relative_path, data in self.metadata_manager.metadata.items():
-            # Convert relative path to full path for file existence check
-            full_path = os.path.join(self.photo_folder, relative_path)
+        # Create the photo display using the existing method
+        self.create_photo_display()
 
-            if os.path.exists(full_path):
-                quantile = self.metadata_manager.get_quantile(relative_path)
-                photos_data.append(
-                    (relative_path, data["skill"], quantile, data["comparisons"])
-                )
-            else:
-                print(f"File not found: {full_path}")
+    def show_summary_page_with_toggle(self):
+        """Enhanced summary page with best/worst toggle"""
+        # Clear existing widgets
+        for widget in self.root.winfo_children():
+            widget.destroy()
 
-        photos_data.sort(key=lambda x: x[1])  # Sort by skill
+        self.load_images()
+        self.sync_files(silent=True)
 
-        # Show up to 20 photos (5 rows × 4 columns)
-        display_count = min(len(photos_data), 20)
-        photos_to_show = photos_data[:display_count]
+        # Button frame
+        button_frame = tk.Frame(self.root)
+        button_frame.pack(side="top", pady=10)
 
-        # Create scrollable frame
-        canvas = tk.Canvas(self.root)
-        scrollbar = tk.Scrollbar(self.root, orient="vertical", command=canvas.yview)
-        scrollable_frame = tk.Frame(canvas)
-
-        canvas.configure(yscrollcommand=scrollbar.set)
-        canvas.bind(
-            "<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        # Existing buttons
+        select_btn = tk.Button(
+            button_frame,
+            text="Select Photo Folder",
+            command=self.select_folder,
+            font=("Arial", 12),
         )
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        select_btn.pack(side="left", padx=10)
 
-        def on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        compare_btn = tk.Button(
+            button_frame,
+            text="Start Comparing Photos",
+            command=self.start_comparison_mode,
+            font=("Arial", 12),
+            bg="lightblue",
+        )
+        compare_btn.pack(side="left", padx=10)
 
-        # Bind mousewheel to canvas and scrollable_frame
-        canvas.bind("<MouseWheel>", on_mousewheel)
-        scrollable_frame.bind("<MouseWheel>", on_mousewheel)
+        # NEW: Best/Worst Toggle Button
+        toggle_text = "Show BEST Photos" if self.show_worst else "Show WORST Photos"
+        toggle_color = "lightgreen" if self.show_worst else "lightcoral"
 
-        # Also bind to the root window when mouse is over the summary
-        self.root.bind("<MouseWheel>", on_mousewheel)
+        toggle_btn = tk.Button(
+            button_frame,
+            text=toggle_text,
+            command=self.toggle_best_worst,
+            font=("Arial", 12, "bold"),
+            bg=toggle_color,
+        )
+        toggle_btn.pack(side="left", padx=10)
 
-        # Display photos in grid (5 rows, 4 columns)
-        for i, (relative_path, skill, quantile, comparisons) in enumerate(
-            photos_to_show
-        ):
-            row = i // 4  # New row every 4 items
-            col = i % 4  # Column cycles 0-3
+        # Existing buttons continue...
+        reset_btn = tk.Button(
+            button_frame,
+            text="Reset All Scores",
+            command=self.reset_all_scores,
+            font=("Arial", 12),
+            bg="lightcoral",
+        )
+        reset_btn.pack(side="left", padx=10)
 
-            # Load and display image with colored border
-            try:
-                # Convert relative path to full path
-                img_path = os.path.join(self.photo_folder, relative_path)
+        # ... rest of your existing buttons ...
 
-                # Ensure the path exists
-                if not os.path.exists(img_path):
-                    print(f"File not found in summary: {img_path}")
-                    continue
+        # Header with folder info and current view indicator
+        header_frame = tk.Frame(self.root)
+        header_frame.pack(pady=10)
 
-                file_ext = os.path.splitext(relative_path)[1].lower()
-                video_extensions = [
-                    ".mp4",
-                    ".mov",
-                    ".mkv",
-                    ".wmv",
-                    ".flv",
-                ]
+        # Dynamic title based on current view
+        current_view = (
+            "Worst Photos (Lowest Skill)"
+            if self.show_worst
+            else "Best Photos (Highest Skill)"
+        )
+        title_color = "red" if self.show_worst else "green"
 
-                if file_ext in video_extensions:
-                    # Extract first frame from video
-                    img = self.extract_video_frame(img_path)
-                    is_video = True
-                else:
-                    # Regular image
-                    img = Image.open(img_path)
-                    is_video = False
+        header = tk.Label(
+            header_frame, text=current_view, font=("Arial", 16, "bold"), fg=title_color
+        )
+        header.pack()
 
-                img.thumbnail((280, 280), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
+        # Folder info (existing code)
+        if self.photo_folder:
+            folder_name = os.path.basename(self.photo_folder)
+            folder_info = tk.Label(
+                header_frame,
+                text=f"Folder: {folder_name}",
+                font=("Arial", 14, "bold"),
+                fg="darkblue",
+            )
+            folder_info.pack(pady=2)
 
-                # Set border color based on file type
-                border_color = "red" if is_video else "blue"
+            full_path = tk.Label(
+                header_frame,
+                text=f"Path: {self.photo_folder}",
+                font=("Arial", 9),
+                fg="gray",
+            )
+            full_path.pack(pady=1)
 
-                # Photo frame with thin colored border
-                photo_frame = tk.Frame(
-                    scrollable_frame,
-                    relief="solid",
-                    borderwidth=2,
-                    bg=border_color,
-                )
-                photo_frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
+            total_photos = (
+                len(self.metadata_manager.metadata) if self.metadata_manager else 0
+            )
+            available_photos = (
+                len(self.image_files) if hasattr(self, "image_files") else 0
+            )
+            count_info = tk.Label(
+                header_frame,
+                text=f"Photos: {available_photos} available / {total_photos} total",
+                font=("Arial", 10),
+                fg="darkgreen",
+            )
+            count_info.pack(pady=2)
 
-                img_label = tk.Label(photo_frame, image=photo, bg=border_color)
-                img_label.image = photo  # Keep reference
-                img_label.pack(padx=1, pady=1)
+        # Legend (existing code)
+        legend_frame = tk.Frame(header_frame)
+        legend_frame.pack(pady=5)
 
-                # Add click event for videos with proper path handling
-                if is_video:
-                    img_label.configure(cursor="hand2")
-                    # Use absolute path to ensure reliability
-                    abs_path = os.path.abspath(img_path)
-                    if os.path.exists(abs_path):
-                        # Create closure that captures the absolute path
-                        def create_video_handler(video_path):
-                            def handler(event):
-                                print(f"Summary video clicked: {video_path}")  # Debug
-                                self.open_video(video_path)
+        tk.Label(legend_frame, text="Legend:", font=("Arial", 10, "bold")).pack(
+            side="left"
+        )
 
-                            return handler
+        img_legend = tk.Label(
+            legend_frame,
+            text=" IMAGE ",
+            bg="blue",
+            fg="white",
+            font=("Arial", 8, "bold"),
+            relief="solid",
+            borderwidth=2,
+        )
+        img_legend.pack(side="left", padx=5)
 
-                        img_label.bind("<Button-1>", create_video_handler(abs_path))
-                        print(f"Bound summary video handler for: {abs_path}")  # Debug
-                    else:
-                        print(f"Warning: Video file not found for summary: {abs_path}")
+        vid_legend = tk.Label(
+            legend_frame,
+            text=" VIDEO ",
+            bg="red",
+            fg="white",
+            font=("Arial", 8, "bold"),
+            relief="solid",
+            borderwidth=2,
+        )
+        vid_legend.pack(side="left", padx=5)
 
-                # Info text with file type indicator and folder context
-                file_type = "VIDEO" if is_video else "IMAGE"
-                # Show folder context in the display
-                display_name = relative_path.replace(
-                    "/", " / "
-                )  # Make path separators more readable
-                info_text = f"{display_name} ({file_type})\nSkill: {skill:.2f} | Quantile: {quantile:.1f}\nComparisons: {comparisons}"
-                info_label = tk.Label(
-                    photo_frame,
-                    text=info_text,
-                    font=("Arial", 9),
-                    bg=border_color,
-                    fg="white",
-                )
-                info_label.pack(pady=2)
-
-            except Exception as e:
-                print(f"Error loading {relative_path} in summary: {e}")
-                # Create error frame
-                photo_frame = tk.Frame(
-                    scrollable_frame,
-                    relief="solid",
-                    borderwidth=2,
-                    bg="red",
-                )
-                photo_frame.grid(row=row, column=col, padx=10, pady=10, sticky="nsew")
-
-                error_label = tk.Label(
-                    photo_frame, text=f"Error: {relative_path}", bg="red", fg="white"
-                )
-                error_label.pack()
-
-        canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y")
+        # Create the photo display
+        self.create_photo_display()
 
     def start_comparison_mode(self):
         """Switch to comparison mode"""
@@ -1438,6 +1646,14 @@ class PhotoManager:
 
         self.setup_ui()
         self.display_random_pair()
+
+    def toggle_best_worst(self):
+        """Toggle between showing best and worst photos"""
+        self.show_worst = not self.show_worst
+        print(f"Now showing: {'WORST' if self.show_worst else 'BEST'} photos")
+
+        # Rebuild the entire summary page to update button text and headers
+        self.show_summary_page()
 
     def update_file_names(self):
         """Update all file names to include quantile prefix (QXXX_)"""

@@ -17,10 +17,13 @@ QUANTILE_THRESHOLD_FOR_COMPARISON = 5  # Minimum quantile to include in comparis
 QUANTILE_THRESHOLD_FOR_MASKING = 10  # Minimum quantile to show in image list
 
 # UI settings
-THUMBNAIL_SIZE = (580, 400)  # Size for comparison view thumbnails
+THUMBNAIL_SIZE = (600, 400)  # Size for comparison view thumbnails
 SUMMARY_THUMBNAIL_SIZE = (280, 280)  # Size for summary view thumbnails
-WINDOW_WIDTH = 1200
-WINDOW_HEIGHT = 600
+# Window settings
+WINDOW_WIDTH = 1300
+WINDOW_HEIGHT = 900
+ALLOW_WINDOW_RESIZE = True
+REMEMBER_WINDOW_SIZE = True
 
 # Caching settings (for performance optimization)
 MAX_IMAGE_CACHE = 10  # Maximum number of images to keep in memory cache
@@ -28,6 +31,11 @@ GARBAGE_COLLECTION_INTERVAL = 10  # Force GC every N comparisons
 
 # Skill calculation settings
 DEFAULT_K_VALUE = 2  # K value for Elo-style skill updates
+
+# Summary page settings
+DEFAULT_SHOW_WORST = True  # True = show worst first, False = show best first
+SUMMARY_PHOTOS_COUNT = 20  # Number of photos to show in summary
+SUMMARY_GRID_COLUMNS = 4  # Number of columns in summary grid
 
 # File naming settings
 QUANTILE_PREFIX_FORMAT = "Q{:03d}_"  # Format for quantile prefixes (Q567_)
